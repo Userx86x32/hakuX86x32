@@ -27,7 +27,7 @@ SITES = (0x3F05D, 0x3F503)
 SITE_OLD = bytes.fromhex('8B442418 F30F2A85C0010000')               # mov eax,[esp+18]; cvtsi2ss xmm0,[ebp+1C0]
 
 HEADER = """name: 40 fps
-description: The game at 40 frames a second (on a 120 Hz screen) instead of 20 or 30, at its normal speed: its logic still steps 15 times a second and every frame is drawn between two steps, as the game does. A frame the device doesn't finish in time shows as soon as it is done. Keep the frame rate capped (Settings: Uncap frame rate off).
+description: The game at 40 frames a second (on a 120 Hz screen) instead of 20 or 30, at its normal speed: its logic still steps 15 times a second and every frame is drawn between two steps, as the game does. A frame the device doesn't finish in time shows as soon as it is done. Keep the frame rate capped (Settings: Uncap frame rate off). Use it instead of the 60 fps mod, not with it.
 author: hakuX
 refresh: 120
 
