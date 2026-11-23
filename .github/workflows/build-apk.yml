@@ -72,6 +72,11 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
+          cache: gradle
+          cache-dependency-path: |
+            android/*.gradle.kts
+            android/app/*.gradle.kts
+            android/gradle/wrapper/gradle-wrapper.properties
 
       - name: Android SDK 36, Build Tools 36.1.0, NDK
         run: |
@@ -112,7 +117,13 @@ jobs:
           # user's gradle.properties, read over the project's, gives this one.
           mkdir -p ~/.gradle
           echo "org.gradle.java.home=$JAVA_HOME" >> ~/.gradle/gradle.properties
-          ./gradlew --no-daemon assembleDebug
+          # Maven Central answers runners with 429 now and then: try again
+          for i in 1 2 3; do
+            ./gradlew --no-daemon assembleDebug && exit 0
+            echo "::warning::gradle attempt $i failed; retrying in $((i * 60)) s"
+            sleep $((i * 60))
+          done
+          exit 1
 
       - name: Name the APK
         id: apk
