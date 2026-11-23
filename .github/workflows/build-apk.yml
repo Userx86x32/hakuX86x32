@@ -108,6 +108,10 @@ jobs:
         working-directory: android
         run: |
           chmod +x gradlew
+          # gradle.properties names a local JDK (org.gradle.java.home); the
+          # user's gradle.properties, read over the project's, gives this one.
+          mkdir -p ~/.gradle
+          echo "org.gradle.java.home=$JAVA_HOME" >> ~/.gradle/gradle.properties
           ./gradlew --no-daemon assembleDebug
 
       - name: Name the APK
