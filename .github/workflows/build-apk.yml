@@ -16,6 +16,13 @@ on:
         description: Attach the APK to a GitHub pre-release
         type: boolean
         default: true
+      cpu:
+        description: CPUs the native core is built for (HAKUX_ARCH)
+        type: choice
+        default: snapdragon-865-up
+        options:
+          - snapdragon-865-up   # armv8.2-a+fp16+dotprod+rcpc: SD865 and newer (the S24+'s 8 Gen 3)
+          - generic             # armv8-a+crc: any arm64 phone, atomics through library calls
 
 permissions:
   contents: write
@@ -90,10 +97,15 @@ jobs:
       - name: Native core (libhakuxcore.so)
         run: |
           set -euo pipefail
+          case "${{ inputs.cpu }}" in
+            generic) arch= ;;
+            *) arch=armv8.2-a+fp16+dotprod+rcpc ;;
+          esac
+          echo "HAKUX_ARCH=${arch:-generic}"
           cmake -S native -B build/native/core -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 -DCMAKE_BUILD_TYPE=Release \
-            -DNC_DEPS="$DEPS"
+            -DNC_DEPS="$DEPS" -DHAKUX_ARCH="$arch"
           ninja -C build/native/core hakuxcore
           bash tools/native/app-libs.sh
 
@@ -131,7 +143,8 @@ jobs:
           set -euo pipefail
           branch="${GITHUB_REF_NAME//\//-}"
           sha="$(git rev-parse --short HEAD)"
-          name="hakuX-debug-${branch}-${GITHUB_RUN_NUMBER}-${sha}.apk"
+          cpu="${{ inputs.cpu }}"; [ "$cpu" = generic ] && cpu=generic || cpu=sd865up
+          name="hakuX-debug-${branch}-${GITHUB_RUN_NUMBER}-${sha}-${cpu}.apk"
           src="$(ls android/app/build/outputs/apk/debug/*.apk | head -1)"
           cp "$src" "$name"
           echo "name=$name" >> "$GITHUB_OUTPUT"
