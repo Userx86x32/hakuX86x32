@@ -55,7 +55,9 @@ jobs:
           shallow https://github.com/KhronosGroup/SPIRV-Reflect vulkan-sdk-1.4.328.0 spirv_reflect
           shallow https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator v3.3.0 vma
           shallow https://github.com/libsdl-org/SDL release-3.4.18 SDL3
-          shallow https://gitlab.freedesktop.org/slirp/libslirp.git v4.7.0 libslirp
+          # libslirp 26be815b (after the 4.7.0 tag: slirp_ssize_t)
+          git clone -q https://gitlab.freedesktop.org/slirp/libslirp.git libslirp
+          git -C libslirp checkout -q 26be815b
           # adrenotools 8fae8ce with the KGSL context priority hook
           git clone -q https://github.com/bylaws/libadrenotools adrenotools
           git -C adrenotools checkout -q 8fae8ce
