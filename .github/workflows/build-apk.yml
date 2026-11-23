@@ -1,0 +1,138 @@
+# Builds the hakuX debug APK (arm64-v8a) on demand: Actions -> Build APK ->
+# Run workflow, choosing the branch. The steps follow android/README.md; the
+# APK is attached to a pre-release named after the branch and run, and kept
+# as the run's artifact.
+#
+# Signing: the repository secret DEBUG_KEYSTORE_B64 (a debug keystore,
+# base64; store and key password "android", alias androiddebugkey) signs
+# every build with the same key, so each one installs over the last. Without
+# it the build gets a new key each run and has to be uninstalled first.
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Attach the APK to a GitHub pre-release
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-apk-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NDK_VERSION: 29.0.14206865
+  DEPS: ${{ github.workspace }}/../native-deps
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: FEX fork and the submodules it builds with
+        run: |
+          git submodule update --init --depth 1 external/fex
+          git -C external/fex submodule update --init --depth 1 External/fmt External/range-v3 \
+            External/rpmalloc External/unordered_dense External/xxhash Source/Common/cpp-optparse
+
+      - name: Third-party sources (android/README.md revisions)
+        run: |
+          set -euo pipefail
+          mkdir -p "$DEPS/root/subprojects"
+          cd "$DEPS"
+          shallow() { git clone -q --depth 1 --branch "$2" "$1" "$3"; }
+          shallow https://github.com/zeux/volk 1.4.304 volk
+          shallow https://github.com/KhronosGroup/glslang 16.1.0 glslang
+          shallow https://github.com/KhronosGroup/SPIRV-Reflect vulkan-sdk-1.4.328.0 spirv_reflect
+          shallow https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator v3.3.0 vma
+          shallow https://github.com/libsdl-org/SDL release-3.4.18 SDL3
+          shallow https://gitlab.freedesktop.org/slirp/libslirp.git v4.7.0 libslirp
+          # adrenotools 8fae8ce with the KGSL context priority hook
+          git clone -q https://github.com/bylaws/libadrenotools adrenotools
+          git -C adrenotools checkout -q 8fae8ce
+          git -C adrenotools submodule update --init --recursive --depth 1
+          git -C adrenotools apply "$GITHUB_WORKSPACE/tools/native/adrenotools-kgsl-context-priority.patch"
+          # nv2a_vsh_cpu at the revision xemu's subprojects/nv2a_vsh_cpu.wrap pins
+          git clone -q https://github.com/abaire/nv2a_vsh_cpu root/subprojects/nv2a_vsh_cpu
+          git -C root/subprojects/nv2a_vsh_cpu checkout -q 89315e8eff62605d2a96fe14429ebeac1dacaa8c
+
+      - name: JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - name: Android SDK 36, Build Tools 36.1.0, NDK
+        run: |
+          set -euo pipefail
+          sdkm="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$sdkm" --licenses > /dev/null || true
+          "$sdkm" --install "platforms;android-36" "build-tools;36.1.0" "ndk;$NDK_VERSION" > /dev/null
+          echo "ANDROID_NDK=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          sudo apt-get update -qq && sudo apt-get install -y -qq ninja-build > /dev/null
+
+      - name: Native core (libhakuxcore.so)
+        run: |
+          set -euo pipefail
+          cmake -S native -B build/native/core -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 -DCMAKE_BUILD_TYPE=Release \
+            -DNC_DEPS="$DEPS"
+          ninja -C build/native/core hakuxcore
+          bash tools/native/app-libs.sh
+
+      - name: Signing key
+        env:
+          KEYSTORE: ${{ secrets.DEBUG_KEYSTORE_B64 }}
+        run: |
+          mkdir -p ~/.android
+          if [ -n "$KEYSTORE" ]; then
+            echo "$KEYSTORE" | base64 -d > ~/.android/debug.keystore
+            echo "Signed with the repository's debug key (DEBUG_KEYSTORE_B64)."
+          else
+            echo "::warning::No DEBUG_KEYSTORE_B64 secret: this APK gets a new key and won't install over an earlier build."
+          fi
+
+      - name: APK
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+
+      - name: Name the APK
+        id: apk
+        run: |
+          set -euo pipefail
+          branch="${GITHUB_REF_NAME//\//-}"
+          sha="$(git rev-parse --short HEAD)"
+          name="hakuX-debug-${branch}-${GITHUB_RUN_NUMBER}-${sha}.apk"
+          src="$(ls android/app/build/outputs/apk/debug/*.apk | head -1)"
+          cp "$src" "$name"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "tag=build-${branch}-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+
+      - name: Keep as the run's artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.apk.outputs.name }}
+          path: ${{ steps.apk.outputs.name }}
+          retention-days: 30
+
+      - name: Pre-release
+        if: inputs.release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.apk.outputs.tag }}" "${{ steps.apk.outputs.name }}" \
+            --target "$GITHUB_SHA" --prerelease \
+            --title "hakuX debug: ${GITHUB_REF_NAME} #${GITHUB_RUN_NUMBER}" \
+            --notes "Debug build of \`${GITHUB_REF_NAME}\` at ${GITHUB_SHA}. Installs as \"hakuX Debug\", beside the regular hakuX."
