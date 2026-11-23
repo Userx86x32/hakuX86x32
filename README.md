@@ -1,3 +1,5 @@
+Userx86x32 note: this space is for me to experiment with patching, changing and altering hakuX to optimize experience on my S24+.
+
 # hakuX
 
 hakuX runs original Xbox games on Android (arm64), tuned for Adreno GPUs.
