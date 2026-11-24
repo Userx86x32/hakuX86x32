@@ -15,7 +15,7 @@ start)
   # hakuX's own logs: stutters (hle-hitch) with their cause, mods applied,
   # shader compiles, vblank and display, audio
   nohup logcat -v time -s hakuX-hle-hitch:V hakuX-native:V hakuX-native-mods:V hakuX-app:V \
-    hakuX-hle-pipe:V hakuX-hle:V hakuX-hle-prof:V hakuX-apu:V hakuX-native-watch:V \
+    hakuX-hle-pipe:V hakuX-hle:V hakuX-hle-prof:V hakuX-apu:V hakuX-native-watch:V hakuX-native-perf:V \
     > "$RUN/logcat.txt" 2>&1 &
   echo $! > "$RUN/pids"
   # clocks, load and temperatures every 5 s (NA where a file can't be read)
