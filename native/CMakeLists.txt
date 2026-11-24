@@ -66,6 +66,7 @@ add_library(hakux_native STATIC
   core/core.c
   core/mmio.c
   core/irq.c
+  core/perfhint.c
   dev/nv2a.c
   dev/ports.c
   dev/usb.c
@@ -109,7 +110,7 @@ target_include_directories(hakux_native PUBLIC "${NC_REPO}")
 target_include_directories(hakux_native PRIVATE "${HAKUX_FEX_DIR}/External/xxhash")
 # The HLE layer's pure modules build without QEMU in this mode.
 target_compile_definitions(hakux_native PRIVATE HLE_HOST_TEST)
-target_link_libraries(hakux_native PUBLIC nc_fex hakux_hle hakux_apu nc_slirp log z)
+target_link_libraries(hakux_native PUBLIC nc_fex hakux_hle hakux_apu nc_slirp log z dl)
 target_compile_options(hakux_native PRIVATE -Wall -Wno-unused-parameter)
 
 # xboxrun's custom Vulkan driver ("vkdriver="): the app's code for it
