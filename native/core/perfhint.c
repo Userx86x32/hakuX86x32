@@ -1,6 +1,9 @@
 /*
  * hakuX native core — Android's performance hints (perfhint.h).
  */
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE             /* sched_setaffinity, CPU_SET */
+#endif
 #include "native/core/perfhint.h"
 #include "native/core/irq.h"
 #include "native/core/nc.h"
@@ -9,6 +12,8 @@
 #include "hw/xbox/hle/prop.h"
 
 #include <dlfcn.h>
+#include <sched.h>
+#include <stdio.h>
 #include <pthread.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -139,6 +144,84 @@ static bool session_threads(void)
     return true;
 }
 
+/* ---- the vCPU on the fastest cores ----
+ *
+ * The guest CPU's thread is the one a frame's late on (a play session's log:
+ * "vCPU starved" and CPU-bound frames), and the scheduler kept it on the
+ * middle cores while the fastest one (the S24+'s Cortex-X4, cpu7) idled at
+ * 1.2 GHz. Its affinity is the cores with the highest cpuinfo_max_freq
+ * (the prime core; all of them where every core is alike). The other threads
+ * keep theirs. debug.hakux.vcpucore 0 gives it every core back, 1 (or unset)
+ * pins it again; read now and then, on the vCPU's thread. */
+static int g_core_state = -1;               /* -1: not set, 0: all cores, 1: the fastest */
+static cpu_set_t g_fast, g_all;
+static int g_nfast = -1;
+
+static void find_cores(void)
+{
+    unsigned best = 0;
+    long ncpu = sysconf(_SC_NPROCESSORS_CONF);
+    ncpu = ncpu > 0 && ncpu <= CPU_SETSIZE ? ncpu : 8;
+    unsigned freq[CPU_SETSIZE] = {0};
+    CPU_ZERO(&g_fast);
+    CPU_ZERO(&g_all);
+    for (long c = 0; c < ncpu; c++) {
+        char path[96];
+        snprintf(path, sizeof(path), "/sys/devices/system/cpu/cpu%ld/cpufreq/cpuinfo_max_freq", c);
+        FILE *f = fopen(path, "r");
+        unsigned v = 0;
+        if (f) {
+            if (fscanf(f, "%u", &v) != 1) {
+                v = 0;
+            }
+            fclose(f);
+        }
+        freq[c] = v;
+        best = v > best ? v : best;
+        CPU_SET(c, &g_all);
+    }
+    g_nfast = 0;
+    for (long c = 0; c < ncpu && best; c++) {
+        if (freq[c] == best) {
+            CPU_SET(c, &g_fast);
+            g_nfast++;
+        }
+    }
+    if (g_nfast == ncpu) {
+        g_nfast = 0;                        /* every core alike: nothing to choose */
+    }
+    char list[64] = "";
+    for (long c = 0, o = 0; c < ncpu && o < (long)sizeof(list) - 4; c++) {
+        if (CPU_ISSET(c, &g_fast)) {
+            o += snprintf(list + o, sizeof(list) - (size_t)o, "%s%ld", o ? "," : "", c);
+        }
+    }
+    nc_log(TAG, "fastest cores: %s (%u kHz) of %ld", g_nfast ? list : "none apart", best, ncpu);
+}
+
+static void vcpu_core_poll(void)
+{
+    static unsigned polls;
+    if (polls++ % 64) {
+        return;
+    }
+    if (g_nfast < 0) {
+        find_cores();
+    }
+    if (!g_nfast) {
+        return;
+    }
+    char v[PROP_VALUE_MAX] = "";
+    const int want = hle_prop_get("debug.hakux.vcpucore", v) > 0 && !strcmp(v, "0") ? 0 : 1;
+    if (want == g_core_state) {
+        return;
+    }
+    const int rc = sched_setaffinity(0, sizeof(cpu_set_t), want ? &g_fast : &g_all);
+    nc_log(TAG, "vCPU thread %d: %s%s", (int)gettid(), want ? "on the fastest cores" : "on every core",
+           rc ? " (refused)" : "");
+    g_core_state = want;
+}
+
 void hle_host_perf_thread(int slot)
 {
     nc_perf_thread(slot);
@@ -146,6 +229,7 @@ void hle_host_perf_thread(int slot)
 
 void nc_perf_flip(void)
 {
+    vcpu_core_poll();                       /* on the vCPU's thread: its flips */
     pthread_once(&g_once, load);
     if (!g_mgr) {
         return;

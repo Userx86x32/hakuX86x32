@@ -14,6 +14,10 @@
  * Android 13 (API 33) and up, looked up in libandroid at run time; without
  * them nothing happens. debug.hakux.adpf 0 turns the hints off (and on again
  * with 1), read now and then.
+ *
+ * The vCPU's thread also runs on the fastest cores (the highest
+ * cpuinfo_max_freq: the prime core); debug.hakux.vcpucore 0 lets it run on
+ * every core again.
  */
 #ifndef NATIVE_CORE_PERFHINT_H
 #define NATIVE_CORE_PERFHINT_H
