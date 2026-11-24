@@ -31,6 +31,7 @@
 #include "hw/xbox/hle/pb/pbmode.h"
 #include "native/core/irq.h"
 #include "native/core/mmio.h"
+#include "native/core/perfhint.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -540,6 +541,7 @@ static void nv2a_write(void *opaque, uint32_t off, uint64_t value, unsigned size
                        (n >> 24) & 7, (n >> 20) & 7, ld(NV_PCRTC_START));
             }
             hle_host_gpu_trace(HLE_GTR_INCREMENT, (n >> 24) & 7);
+            nc_perf_flip();                 /* the performance hints' frame (perfhint.h) */
             hle_pb_flipped(ld(NV_PCRTC_START));
             hle_pb_kick();
         }

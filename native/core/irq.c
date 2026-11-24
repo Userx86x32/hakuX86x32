@@ -426,6 +426,9 @@ bool nc_irq_take_work(void)
     return __atomic_load_n(&g_work, __ATOMIC_ACQUIRE) && __atomic_exchange_n(&g_work, 0, __ATOMIC_ACQ_REL);
 }
 
+/* the guest CPU's time in nc_irq_idle_wait so far (perfhint.c) */
+static uint64_t g_idle_ns;
+
 uint32_t nc_irq_idle_wait(uint64_t deadline_ns, uint64_t max_ns)
 {
     pthread_once(&g_once, init_cv);
@@ -447,5 +450,14 @@ uint32_t nc_irq_idle_wait(uint64_t deadline_ns, uint64_t max_ns)
     }
     pthread_mutex_unlock(&g_mu);
     __atomic_store_n(&g_nc_idle_waiting, 0, __ATOMIC_RELAXED);
+    struct timespec end;
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    const uint64_t end_ns = (uint64_t)end.tv_sec * 1000000000ull + (uint64_t)end.tv_nsec;
+    __atomic_fetch_add(&g_idle_ns, end_ns - now_ns, __ATOMIC_RELAXED);
     return nc_irq_lines();
+}
+
+uint64_t nc_irq_idle_ns(void)
+{
+    return __atomic_load_n(&g_idle_ns, __ATOMIC_RELAXED);
 }

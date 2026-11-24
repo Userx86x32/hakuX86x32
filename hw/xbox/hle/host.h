@@ -90,6 +90,9 @@ void hle_host_mem_noaccess(uint32_t pa, uint32_t len, bool on);
 /* ---- the GPU device: the display timing ----------------------------------- */
 
 uint64_t hle_host_vblank_count(void);
+/* The calling thread is one a frame waits on (hitch.h's HLE_HT_* slot): the
+ * host's performance hints take it in (native/core/perfhint.h). */
+void hle_host_perf_thread(int slot);
 int64_t hle_host_vblank_period_ns(void);
 
 /* ---- the GPU's registers (push-buffer mode) ------------------------------- */
