@@ -571,6 +571,7 @@ cool_down() {
 # One run: scene (route), slot, variant, kind (measure, or a probe's name).
 one_run() {
   scene=$1 slot=$2 v=$3 kind=$4
+  vname=${3%%:*}                    # (set_variant reuses v: sh has no local variables)
   NRUN=$((NRUN + 1))
   label=${v%%:*}
   [ "$kind" = measure ] || label=probe-$kind
@@ -610,9 +611,9 @@ one_run() {
       { echo "end=$(date)"; echo "power at end:"; power_state; } >> "$RUN_DIR/run.txt"
       setprop debug.hakux.state ''
       case " $RUNFAILS " in
-        *" ${v%%:*} "*) die "variant ${v%%:*} failed its check twice ($(sed -n 's/^failed=//p' "$RUN_DIR/run.txt"))";;
+        *" $vname "*) die "variant $vname failed its check twice ($(sed -n 's/^failed=//p' "$RUN_DIR/run.txt"))";;
       esac
-      RUNFAILS="$RUNFAILS ${v%%:*}"
+      RUNFAILS="$RUNFAILS $vname"
       return 0
     fi
     say "replaying..."
