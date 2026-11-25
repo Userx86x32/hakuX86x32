@@ -6,7 +6,7 @@
 set -e
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 M=$(mktemp -d)
-trap 'kill $(cat "$M"/bg 2>/dev/null) 2>/dev/null; rm -rf "$M"' EXIT
+trap 'kill $(cat "$M"/bg 2>/dev/null) 2>/dev/null || true; rm -rf "$M"; exit $fail' EXIT
 mkdir -p "$M/bin" "$M/props" "$M/data" "$M/out"
 : > "$M/logcat"
 export M

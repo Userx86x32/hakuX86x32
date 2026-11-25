@@ -234,7 +234,9 @@ cmd_record() {
   done
   sleep 1
   stop_capture
-  run-as $PKG cat "$APPDIR/$name.txt" > "$OUT/$name.txt" || die "couldn't copy the route out"
+  # through a pipe: run-as may not touch a file on shared storage (SELinux)
+  run-as $PKG cat "$APPDIR/$name.txt" | cat > "$OUT/$name.txt"
+  [ -s "$OUT/$name.txt" ] || die "couldn't copy the route out of the app"
   setprop debug.hakux.env ''        # stop recording on the next start
   steps=$(grep -vc '^#' "$OUT/$name.txt")
   last=$(tail -n 1 "$OUT/$name.txt")
@@ -250,7 +252,13 @@ cmd_run() {
   [ -f "$OUT/$name.txt" ] || die "no route $OUT/$name.txt (record it first)"
   mkdir -p "$OUT" || die "can't write $OUT"
   run-as $PKG mkdir -p "$APPDIR" || die "run-as $PKG failed (a debug build is needed)"
-  run-as $PKG sh -c "cat > $APPDIR/$name.txt" < "$OUT/$name.txt" || die "couldn't copy the route in"
+  # through a pipe: run-as can't read a file on shared storage (SELinux; it
+  # came out empty: "pad script: no steps"), then checked
+  cat "$OUT/$name.txt" | run-as $PKG sh -c "cat > $APPDIR/$name.txt"
+  want=$(wc -l < "$OUT/$name.txt"); got=$(run-as $PKG cat "$APPDIR/$name.txt" | wc -l)
+  [ "$want" -gt 0 ] && [ "$got" = "$want" ] ||
+    die "couldn't copy the route into the app ($got of $want lines)"
+  say "route $name: $(grep -vc '^#' "$OUT/$name.txt") steps in the app"
   save_props
   setprop debug.hakux.env "NC_PAD_SCRIPT=@$APPDIR/$name.txt"
   setprop debug.hakux.env2 "NC_PAD_STATE=1"
