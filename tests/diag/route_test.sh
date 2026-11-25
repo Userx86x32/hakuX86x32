@@ -143,8 +143,10 @@ check '[ -z "$(cat "$M/props/debug.hakux.adpf")" ] && [ -z "$(cat "$M/props/debu
 
 echo "== suite: a mod and core options (A) against the app's settings (B); wood has no savestate"
 : > "$M/setprops"; rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
+: > "$M/out/bower.txt"           # an empty route left by an old runner: made again
 sh "$ROOT/tools/diag/route.sh" suite m40:mod=40fps,scale=3 base > "$M/suite.log" 2>&1 || { cat "$M/suite.log"; exit 1; }
 cat "$M/suite.log"
+check 'grep -q "route bower: .* has no steps, making a new one" "$M/suite.log" && [ "$(grep -c "^[0-9]" "$M/out/bower.txt")" -ge 3 ]'
 B=$(ls -d "$M"/out/suite-2* | head -n 1)
 check '[ -d "$B/01-bower-m40" ] && [ -d "$B/02-bower-base" ] && [ -d "$B/03-bower-probe-perfetto" ] && [ ! -d "$B/04-wood-m40" ]'
 check 'grep -q "skipped_scene=wood" "$B/batch.txt" && grep -q "scene wood: no savestate in slot 2" "$M/suite.log"'

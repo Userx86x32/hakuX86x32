@@ -92,7 +92,7 @@ save_props() {
   done
   for p in $RUNNER_PROPS; do echo "$p=" >> $TMPD/hakux_route_props; done
   STAYON=$(settings get global stay_on_while_plugged_in 2>/dev/null)
-  svc power stayon usb 2>/dev/null     # the screen stays on while plugged in (put back after)
+  svc power stayon usb 2>&1 | cat > /dev/null   # the screen stays on while plugged in (put back after)
 }
 saved_value() { sed -n "s/^$1=//p" $TMPD/hakux_route_props; }
 restore() {
@@ -100,7 +100,7 @@ restore() {
   while IFS== read -r p v; do setprop "$p" "$v"; done < $TMPD/hakux_route_props
   setprop debug.hakux.state ''          # not put back: a new value would load a state
   rm -f $TMPD/hakux_route_props
-  [ -n "$STAYON" ] && settings put global stay_on_while_plugged_in "$STAYON" 2>/dev/null
+  [ -n "$STAYON" ] && settings put global stay_on_while_plugged_in "$STAYON" 2>&1 | cat > /dev/null
   stop_capture
 }
 trap 'say "stopped"; restore; exit 130' INT TERM HUP
@@ -137,10 +137,10 @@ last_game() {
 start_game() {
   uri=$(last_game)
   [ -n "$uri" ] || return 1
-  input keyevent KEYCODE_WAKEUP 2>/dev/null
-  wm dismiss-keyguard 2>/dev/null       # no-op behind a PIN: unlock the phone first
+  input keyevent KEYCODE_WAKEUP 2>&1 | cat > /dev/null
+  wm dismiss-keyguard 2>&1 | cat > /dev/null    # no-op behind a PIN: unlock the phone first
   say "starting $uri"
-  am start -a android.intent.action.VIEW -d "$uri" -n $PKG/com.rfandango.haku_x.LauncherActivity > /dev/null 2>&1
+  am start -a android.intent.action.VIEW -d "$uri" -n $PKG/com.rfandango.haku_x.LauncherActivity 2>&1 | cat > /dev/null
   w=0
   while [ -z "$(native_pid)" ] && [ $w -lt 30 ]; do sleep 1; w=$((w + 1)); done
   [ -n "$(native_pid)" ]
@@ -436,10 +436,16 @@ one_run() {
   setprop debug.hakux.state ''
 }
 
-# Readies a scene: its route (a tour if there's none), in the app.
+# Steps in a route file (0: none, or an empty file left by an old runner).
+route_steps() { grep -c '^[0-9]' "$OUT/$1.txt" 2>/dev/null || true; }
+
+# Readies a scene: its route (a tour if there's none, or it has no steps), in the app.
 ready_scene() {
   check_name "$1"
-  [ -f "$OUT/$1.txt" ] || cmd_tour "$1" "$ROUTE_SECS"
+  if [ "$(route_steps "$1")" -lt 1 ]; then
+    [ -f "$OUT/$1.txt" ] && say "route $1: $OUT/$1.txt has no steps, making a new one"
+    cmd_tour "$1" "$ROUTE_SECS"
+  fi
   push_route "$1"
   setprop debug.hakux.env "NC_PAD_SCRIPT=@$APPDIR/$1.txt"
   setprop debug.hakux.env2 "NC_PAD_STATE=1"
@@ -459,13 +465,14 @@ cmd_tour() {
   frames=$((secs * 30))                         # at 30 frames a second
   {
     echo "# hakuX route: tour (a star of out-and-back runs), $secs s (route.sh tour)"
-    f=90 k=0
-    while [ $f -lt $frames ]; do
-      case $((k % 4)) in 0) len=150;; 1) len=300;; 2) len=210;; *) len=360;; esac
-      echo "${f}f:ly=32767:${len}f"; f=$((f + len))
-      echo "${f}f:ly=-32767:${len}f"; f=$((f + len))
-      echo "${f}f:rx=32767:45f"; f=$((f + 75))
-      k=$((k + 1))
+    # (tour_ names: sh has no local variables, and the suite's k counts scenes)
+    tour_f=90 tour_k=0
+    while [ $tour_f -lt $frames ]; do
+      case $((tour_k % 4)) in 0) len=150;; 1) len=300;; 2) len=210;; *) len=360;; esac
+      echo "${tour_f}f:ly=32767:${len}f"; tour_f=$((tour_f + len))
+      echo "${tour_f}f:ly=-32767:${len}f"; tour_f=$((tour_f + len))
+      echo "${tour_f}f:rx=32767:45f"; tour_f=$((tour_f + 75))
+      tour_k=$((tour_k + 1))
     done
   } > "$OUT/$name.txt"
   say "made $OUT/$name.txt ($(grep -vc '^#' "$OUT/$name.txt") steps, about $secs s)"
@@ -508,7 +515,7 @@ cmd_run() {
   if [ $# -ge 2 ]; then shift 2; else shift $#; fi
   case "$runs" in ''|*[!0-9]*) die "runs is a number (got '$runs')";; esac
   [ $# -gt 0 ] || set -- default
-  [ -f "$OUT/$name.txt" ] || die "no route $OUT/$name.txt (record it first, or: tour $name)"
+  [ "$(route_steps "$name")" -ge 1 ] || die "route $name has no steps ($OUT/$name.txt): record it, or: route tour $name"
   mkdir -p "$OUT" || die "can't write $OUT"
   VARIANT_PROPS=$(variant_props "$@")
   save_props
@@ -580,7 +587,11 @@ cmd_start() {
   fi
   : > "$OUT/console.txt"; rm -f "$OUT/route.pid"
   echo "$*" > "$OUT/console.cmd"        # what's running (route.sh status, route queue)
-  HAKUX_PIDFILE=$OUT/route.pid setsid nohup sh "$0" "$@" > "$OUT/console.txt" 2>&1 < /dev/null &
+  # its output through a pipe into console.txt: a service command (settings,
+  # svc, wm, am) can't write to a file on shared storage itself ("Failure
+  # calling service settings: Failed transaction")
+  HAKUX_PIDFILE=$OUT/route.pid HAKUX_CONSOLE=$OUT/console.txt setsid sh -c \
+    'nohup sh "$0" "$@" < /dev/null 2>&1 | cat > "$HAKUX_CONSOLE"' "$0" "$@" > /dev/null 2>&1 &
   w=0; while [ ! -s "$OUT/route.pid" ] && [ $w -lt 10 ]; do sleep 1; w=$((w + 1)); done
 }
 
