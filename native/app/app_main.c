@@ -156,6 +156,9 @@ EXPORT JNIEXPORT void JNICALL Java_com_rfandango_haku_1x_NativeCoreActivity_nati
 {
     nc_kernel_set_paused(&g_core.kernel, on != JNI_FALSE);
     nc_audio_set_paused(on != JNI_FALSE);
+    if (on) {
+        nc_pad_record_flush();
+    }
 }
 
 /* Savestates (native/state): the running game saved to path, on the

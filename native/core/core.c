@@ -38,6 +38,11 @@ void nc_core_set_loadstate(const char *path)
 {
     snprintf(g_loadstate, sizeof(g_loadstate), "%s", path ? path : "");
 }
+
+bool nc_core_state_loaded(void)
+{
+    return g_loaded;
+}
 static bool core_hook_query(void *opaque, uint32_t eip);
 
 /* An XBE header's certificate: the title ID and version. */
