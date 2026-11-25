@@ -87,7 +87,8 @@ check '[ -z "$(cat "$M/props/debug.hakux.state")" ]'
 echo "== tour, then run: 3 runs over 2 variants, the game started by the runner"
 : > "$M/setprops"; rm -f "$M/pid" "$M/booted"
 sh "$ROOT/tools/diag/route.sh" tour bower 2
-check '[ "$(grep -c "f:ly=32767:300f" "$M/out/bower.txt")" -ge 6 ]'
+check '[ "$(grep -c "f:ly=32767:" "$M/out/bower.txt")" = "$(grep -c "f:ly=-32767:" "$M/out/bower.txt")" ]'
+check '[ "$(grep -c "f:ly=-32767:" "$M/out/bower.txt")" -ge 4 ]'
 check '! grep -q "a\|b\|start" "$(sed 1d "$M/out/bower.txt" > "$M/t"; echo "$M/t")"'
 
 sh "$ROOT/tools/diag/route.sh" run bower 3 x4:vcpucore=1 all:vcpucore=0,debug.hakux.adpf=0 > "$M/run.log" 2>&1 ||

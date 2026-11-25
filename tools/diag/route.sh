@@ -5,9 +5,9 @@
 # each run. Runs on the phone (adb shell); route.bat drives it from the PC.
 #
 #   sh route.sh tour <name> [minutes]
-#       Makes a route with no one playing: from the savestate, run forward,
-#       turn, sweep the camera, again and again (sticks only: no buttons, so
-#       no talking, attacking or menus).
+#       Makes a route with no one playing: from the savestate, run out and
+#       back again, turn the camera, the next spoke (sticks only: no buttons,
+#       so no talking, attacking or menus).
 #   sh route.sh record <name>
 #       Or a route you play: the script loads savestate slot 1 and records
 #       your controller until you open hakuX's menu (or press Home).
@@ -188,23 +188,24 @@ set_variant() {   # label:prop=value,prop=value
 }
 
 # ---- commands ----
-# A route with no one playing (sticks only), in frames since the load:
-# settle, then rounds of run forward, turn while running, stop and sweep the
-# camera, turning left and right in turn so it zigzags rather than circles.
+# A route with no one playing (sticks only), in frames since the load: a
+# star around the savestate's spot. Each spoke runs out, then runs back the
+# way it came (the stick pulled back: always a clear path, so a rock or a
+# wall on the way out can't wedge him for good), then the camera turns for
+# the next spoke; spokes of 5 to 12 seconds out.
 cmd_tour() {
   name=$1; check_name "$name"; mins=${2:-3}
   case "$mins" in ''|*[!0-9]*) die "minutes is a number (got '$mins')";; esac
   mkdir -p "$OUT" || die "can't write $OUT"
   frames=$((mins * 60 * 30))            # at 30 frames a second
   {
-    echo "# hakuX route: tour, $mins min (route.sh tour)"
+    echo "# hakuX route: tour (a star of out-and-back runs), $mins min (route.sh tour)"
     f=90 k=0
     while [ $f -lt $frames ]; do
-      if [ $((k % 2)) = 0 ]; then side=32767; else side=-32767; fi
-      echo "${f}f:ly=32767:300f"; f=$((f + 300))
-      echo "${f}f:ly=32767+lx=$side:40f"; f=$((f + 40))
-      echo "${f}f:ly=32767:200f"; f=$((f + 200))
-      echo "${f}f:rx=$side:120f"; f=$((f + 150))
+      case $((k % 4)) in 0) len=150;; 1) len=300;; 2) len=210;; *) len=360;; esac
+      echo "${f}f:ly=32767:${len}f"; f=$((f + len))
+      echo "${f}f:ly=-32767:${len}f"; f=$((f + len))
+      echo "${f}f:rx=32767:45f"; f=$((f + 75))
       k=$((k + 1))
     done
   } > "$OUT/$name.txt"
