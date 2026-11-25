@@ -166,6 +166,22 @@ check 'awk "/setprop debug.hakux.adpf=0/ { s = 1 } s && /setprop debug.hakux.adp
 check '[ -s "$B/03-bower-probe-simpleperf/perf.data" ] && grep -q "^report: report" "$B/03-bower-probe-simpleperf/simpleperf_symbols.txt"'
 check 'grep -q "record --app com.rfandango.haku_x.debug" "$M/simpleperf"'
 
+echo "== resume: a suite cut off after its first run goes on in the same batch, the game restarted"
+rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
+sh "$ROOT/tools/diag/route.sh" start suite r1:adpf=1 base
+w=0; until grep -qs "^end=" "$M"/out/suite-2*/01-bower-r1/run.txt 2>/dev/null || [ $w -ge 120 ]; do sleep 1; w=$((w + 1)); done
+sh "$ROOT/tools/diag/route.sh" stop; sleep 3
+check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "stopped|suite r1:adpf=1 base|" ]'
+B1=$(ls -d "$M"/out/suite-2* | tail -n 1)
+check '[ ! -f "$B1/report.txt" ] && [ -f "$M/out/.suite_state" ]'
+rm -f "$M/pid"                                  # the game closed meanwhile
+sh "$ROOT/tools/diag/route.sh" suite r1:adpf=1 base > "$M/resume.log" 2>&1 || { cat "$M/resume.log"; exit 1; }
+cat "$M/resume.log"
+check 'grep -q "resuming $B1" "$M/resume.log" && grep -q "run 1: bower, r1: done before, kept" "$M/resume.log"'
+check '[ "$(ls -d "$M"/out/suite-2* | tail -n 1)" = "$B1" ] && [ -f "$B1/report.txt" ] && [ ! -f "$M/out/.suite_state" ]'
+check '[ "$(ls -d "$B1"/0* | wc -l)" = 3 ] && grep -q "^end=" "$B1/02-bower-base/run.txt"'
+check 'grep -q "settings (from route.cfg): .*COOL_MAX=0" "$M/resume.log"'
+
 echo "== save and clean (from the PC: route save 2, route clean)"
 sh "$ROOT/tools/diag/route.sh" save 2 > "$M/save.log" 2>&1; cat "$M/save.log"
 check '[ -f "$A/files/native/states/4D5300D1.1/slot2.hxs" ] && grep -q "saved to slot 2" "$M/save.log"'

@@ -38,9 +38,17 @@ it, and pulls and uploads the results. Settings live in `route.cfg` next to
 - **Alternate variants** (A B A B ...) so heat drifts over the batch affect both.
 - **Each run starts from its own variant's settings.** Anything another variant
   set (a property, a core option) is put back before the run.
-- **Same start temperature.** Before each run, wait until the hottest gpuss
-  zone (thermal zones 32-39) is under 45 C, for at most 90 s, and record the
-  start temperature (`run.txt`: `start_gpuss_C`).
+- **Start temperature.** Before each run, wait until the hottest gpuss zone
+  (thermal zones 32-39) is under 45 C, for at most `COOL_MAX` seconds (10),
+  and record the start temperature (`run.txt`: `start_gpuss_C`). The game
+  runs on during the wait, so waiting barely cools the phone (90 s never got
+  it from 50-58 C under 45 C); alternating A and B is what keeps heat fair.
+- **Auto Blocker turns itself back on about every 30 minutes** on this phone
+  (USB and Wi-Fi debugging alike), ending the batch. A batch of 14 runs takes
+  about 25 minutes with the short cool-down; when one is cut off,
+  `route queue` waits (beeping about once a minute) until Auto Blocker is
+  switched off again, then resumes the same batch: the runs that finished are
+  kept and only the cut one is done again.
 - **Auto Blocker.** Whether it's on can't be read from adb, but while it's
   on the phone refuses adb completely, so "adb answers" means "Auto Blocker
   is off". `route queue` uses that: it waits whenever adb stops answering and
@@ -142,9 +150,9 @@ ready" stutters); V3, V5 for pop-in and GPU; V6-V8 as time allows.
 ## 4. Batch layout and timing
 
 A run takes about 75 s of route + 15-20 s for the savestate to load + up to
-90 s of cool-down, so 1:40-3:05; a probe run the same. Per scene: 6
-measurement runs + 1 probe = 12-21 minutes. Both scenes: **24-43 minutes**,
-about 30 when the phone stays cool. If batches run too long, set `RUNS=4` in
+10 s of cool-down, so about 1:45; a probe run the same. Per scene: 6
+measurement runs + 1 probe = about 12 minutes. Both scenes: **about 25
+minutes**, inside the ~30 minutes Auto Blocker allows. If batches run too long, set `RUNS=4` in
 `route.cfg` (A B A B per scene: weaker statistics), or drop a scene
 (`SCENES="bower:1"`); keep measurement runs over probe runs.
 

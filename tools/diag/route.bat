@@ -138,8 +138,9 @@ rem the batch is still running (the phone was away a while): follow it again
 if "%ST%"=="running" goto queue_watch
 rem it finished while the phone was away
 if "%ST%"=="done" if "%STC%"=="%NEXT%" goto queue_finished
-if %TRIES% geq 3 (
-  echo [%TIME%] queue: "%NEXT%" didn't finish in 3 tries, skipped
+rem (a try that was cut off resumes the batch, keeping its finished runs)
+if %TRIES% geq 5 (
+  echo [%TIME%] queue: "%NEXT%" didn't finish in 5 tries, skipped
   >> "%QD%" echo %NEXT%
   goto queue_next
 )
@@ -155,13 +156,13 @@ call :phone_status
 if "%ST%"=="running" goto queue_watch
 if "%ST%"=="done" if "%STC%"=="%NEXT%" goto queue_finished
 if "%ST%"=="failed" goto queue_failed
-echo [%TIME%] queue: "%NEXT%" ended without finishing (Auto Blocker or the game closing): again
+echo [%TIME%] queue: "%NEXT%" was cut off (Auto Blocker or the cable): going on with it, its finished runs kept
 goto queue_try
 rem the runner stopped on an error of its own: the same again would fail the same way
 :queue_failed
 echo.
 echo [%TIME%] queue: stopped. "%NEXT%" failed with:
-"%ADB%" shell grep "^.route. error:" /sdcard/hakux_diag/routes/console.txt
+"%ADB%" shell "grep 'route. error:' /sdcard/hakux_diag/routes/console.txt"
 echo Fix that, then run "route queue" again: it starts with "%NEXT%".
 goto :eof
 :queue_finished
@@ -188,7 +189,12 @@ rem waits until the phone answers adb (Auto Blocker on, unplugged, locked or not
 echo.
 echo [%TIME%] waiting for the phone. Check: plugged in, unlocked, Auto Blocker off
 echo           (Settings, Security and privacy, Auto Blocker), and "Allow USB debugging" if asked.
+set "BEEPS=0"
 :wait_phone_loop
+rem a beep about once a minute while waiting (set BEEP=0 for none)
+set /a BEEPS+=1
+set /a BEEPM=BEEPS %% 4
+if not "%BEEP%"=="0" if "%BEEPM%"=="1" powershell -NoProfile -Command "[console]::Beep(880,300);[console]::Beep(660,300)" >nul 2>nul
 ping -n 16 127.0.0.1 >nul
 "%ADB%" get-state 2>nul | findstr /x device >nul || goto wait_phone_loop
 echo [%TIME%] the phone is back

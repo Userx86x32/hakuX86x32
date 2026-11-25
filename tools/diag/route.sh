@@ -54,7 +54,8 @@ ROUTE_SECS=75               # a tour's length
 SLOT=1                      # run's slot
 PROBES=perfetto             # run's probe runs (perfetto simpleperf prof; "" none)
 COOL_C=45                   # cool down until the hottest gpuss zone is under this
-COOL_MAX=90                 # ... for at most this many seconds
+COOL_MAX=10                 # ... for at most this many seconds (the game runs on meanwhile, so
+                            # waiting barely cools it: 90 s never got 50-58 C under 45 C)
 WATCH=0x862494              # debug.hakux.watch: Fable's presentation interval (D3D)
 PROBE_SECS=20               # a probe's length, mid-route
 CFG=${HAKUX_CFG:-$HERE/route.cfg}
@@ -164,9 +165,15 @@ slot_exists() {
 # works), so a new pid is the sign. The request is a new property value each
 # time; the app ignores it until the game can take savestates, so retry.
 load_slot() {
-  old=$(native_pid)
-  [ -n "$old" ] || die "the game isn't running"
   for try in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    old=$(native_pid)
+    if [ -z "$old" ]; then
+      # the game closed (or never started): start it again, then load
+      say "the game isn't running: starting it"
+      start_game || die "the game couldn't be started (is the phone unlocked?)"
+      sleep 20
+      old=$(native_pid)
+    fi
     setprop debug.hakux.state ''
     sleep 1
     setprop debug.hakux.state "load:$1"
@@ -179,7 +186,6 @@ load_slot() {
         return 0
       fi
     done
-    [ -n "$(native_pid)" ] || die "the game closed"
     say "slot $1 not loaded yet (try $try; the game may still be booting)"
   done
   die "savestate slot $1 didn't load (is there a state in slot $1?)"
@@ -379,6 +385,12 @@ new_batch() {   # name, then the variants
   NRUN=0
 }
 
+# The settings in use (route.cfg's, if it was found), at the start of a batch.
+say_settings() {
+  if [ -f "$CFG" ]; then f="from route.cfg"; else f="no route.cfg: the defaults"; fi
+  say "settings ($f): SCENES=\"$SCENES\" RUNS=$RUNS ROUTE_SECS=$ROUTE_SECS COOL_C=$COOL_C COOL_MAX=$COOL_MAX PROBE_SECS=$PROBE_SECS"
+}
+
 # Cools down until the hottest gpuss zone is under COOL_C (COOL_MAX s at most).
 cool_down() {
   w=0
@@ -394,7 +406,13 @@ one_run() {
   NRUN=$((NRUN + 1))
   label=${v%%:*}
   [ "$kind" = measure ] || label=probe-$kind
-  RUN_DIR=$BATCH/$(printf '%02d' $NRUN)-$scene-$label; mkdir -p "$RUN_DIR"
+  RUN_DIR=$BATCH/$(printf '%02d' $NRUN)-$scene-$label
+  # a resumed batch: a run that finished is kept, one that was cut is done again
+  if grep -q '^end=' "$RUN_DIR/run.txt" 2>/dev/null; then
+    say "run $NRUN: $scene, $label: done before, kept"
+    return 0
+  fi
+  rm -rf "$RUN_DIR"; mkdir -p "$RUN_DIR"
   cool_down
   # the guest word watch, set again each run (a restart clears properties;
   # each new game process reads it again); left set afterwards
@@ -521,6 +539,7 @@ cmd_run() {
   save_props
   ready_scene "$name"
   new_batch "$name" "$@"
+  say_settings
   wait_game
   i=0
   while [ $i -lt "$runs" ]; do
@@ -544,9 +563,24 @@ cmd_suite() {
   VARIANT_PROPS=$(variant_props "$@")
   save_props
   name=suite; [ -n "$SUITE_NAME" ] && name=$SUITE_NAME
-  new_batch "$name" "$@"
-  flip=$(cat "$OUT/.probe_flip" 2>/dev/null); flip=${flip:-0}
-  echo $((1 - flip)) > "$OUT/.probe_flip"
+  # the same suite again after it was cut off (Auto Blocker, the cable): its
+  # batch goes on, keeping the runs that finished (.suite_state: the
+  # command, the batch's folder, its probe order)
+  key="$name $*" st=$OUT/.suite_state resumed=
+  if [ -f "$st" ]; then
+    IFS='|' read -r skey sdir sflip < "$st"
+    if [ "$skey" = "$key" ] && [ -d "$sdir" ] && [ ! -f "$sdir/report.txt" ]; then
+      BATCH=$sdir; flip=$sflip; NRUN=0; resumed=1
+      say "resuming $BATCH: the runs that finished are kept"
+    fi
+  fi
+  if [ -z "$resumed" ]; then
+    new_batch "$name" "$@"
+    flip=$(cat "$OUT/.probe_flip" 2>/dev/null); flip=${flip:-0}
+    echo $((1 - flip)) > "$OUT/.probe_flip"
+    echo "$key|$BATCH|$flip" > "$st"
+  fi
+  say_settings
   wait_game
   k=0
   for sc in $SCENES; do
@@ -570,6 +604,7 @@ cmd_suite() {
     k=$((k + 1))
   done
   restore
+  rm -f "$st"
   say "batch done: $BATCH"
   sh "$HERE/route_report.sh" "$BATCH"
 }

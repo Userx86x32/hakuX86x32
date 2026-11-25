@@ -10,9 +10,10 @@
 # and kept on the phone. To make one again (at a new length): route tour bower
 #ROUTE_SECS=75
 # Cool down until the hottest GPU zone is under COOL_C degrees, at most
-# COOL_MAX seconds.
+# COOL_MAX seconds. The game runs on during the wait, so it barely cools:
+# the default is a short pause; each run's start temperature is recorded.
 #COOL_C=45
-#COOL_MAX=90
+#COOL_MAX=10
 # Probe length (seconds, mid-route).
 #PROBE_SECS=20
 # "route run": the slot, and the probe runs after the measurement runs
