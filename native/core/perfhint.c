@@ -88,6 +88,10 @@ void nc_perf_thread(int slot)
     pthread_once(&g_once, load);
     __atomic_store_n(&g_tid[slot], (int32_t)gettid(), __ATOMIC_RELEASE);
     __atomic_fetch_add(&g_tid_gen, 1, __ATOMIC_ACQ_REL);
+    /* which thread is which, hints on or off (tools/diag/route.sh: each
+     * thread's run-queue wait from /proc/<pid>/task/<tid>/schedstat) */
+    static const char *const k_names[NC_PERF_SLOTS] = {"vCPU", "render", "decode", "present"};
+    nc_log(TAG, "thread %s: tid %d", k_names[slot], (int)gettid());
 }
 
 /* debug.hakux.adpf: 0 off, anything else (or unset) on */

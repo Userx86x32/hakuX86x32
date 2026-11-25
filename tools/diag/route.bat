@@ -2,10 +2,20 @@
 rem hakuX route automation from the PC: copies route.sh and friends to the
 rem phone, runs them there, and pulls the results back next to this file.
 rem   route install          the latest test APK (or: route install <file.apk or URL>)
-rem   route auto [runs]      a hands-off route from savestate slot 1, then the batch:
-rem                          X4 pinning on and off in turn (6 runs by default)
-rem   route tour bower 3     the hands-off route alone (3 minutes)
-rem   route run bower 6 x4:vcpucore=1 all:vcpucore=0
+rem   route suite A [B]      the 30-minute batch (docs/diag-suite.md): per scene
+rem                          (bower: slot 1, wood: slot 2), 6 runs A B A B..., then a
+rem                          probe run (Perfetto or simpleperf). A variant is
+rem                          label:name=value,... e.g.
+rem                            route suite base nohints:adpf=0
+rem                            route suite fps60:mod=60fps fps40:mod=40fps
+rem                            route suite base async0:asyncpipe=0
+rem                            route suite base cold:cold=1
+rem                            route suite base sysdrv:driver=system
+rem                            route suite base x3:scale=3
+rem   route auto             route suite x4:vcpucore=1 all:vcpucore=0
+rem   route tour bower 75    a hands-off route alone (75 seconds)
+rem   route run bower 6 x4:vcpucore=1 all:vcpucore=0   one scene (slot 1)
+rem Settings (scenes, runs, cool-down...): route.cfg next to this file, if any.
 rem   route record bower     a route you play yourself
 rem   route watch            follows a batch again (after the cable dropped)
 rem   route stop             stops a batch
@@ -15,7 +25,8 @@ rem A batch runs on the phone by itself: a cable drop doesn't stop it.
 rem After a batch (route auto / run / watch) the results are pulled and
 rem uploaded to GitHub: the diag-results branch of hakuX86x32, routes\ in it
 rem (needs Git for Windows; the first push asks you to sign in to GitHub).
-rem Perfetto traces stay on the PC: set UPLOAD_TRACES=1 to upload them too.
+rem Perfetto traces and CPU profiles (perf.data) stay on the PC: set
+rem UPLOAD_TRACES=1 to upload them too (the simpleperf reports always go).
 rem set UPLOAD=0 to skip uploading.
 setlocal
 set "HERE=%~dp0"
@@ -35,6 +46,7 @@ if /i "%1"=="pull" goto pull
 if /i "%1"=="install" goto install
 "%ADB%" shell mkdir -p /data/local/tmp/hakux
 "%ADB%" push "%HERE%route.sh" "%HERE%route_report.sh" "%HERE%route_trace.pbtx" /data/local/tmp/hakux/ >nul || exit /b 1
+if exist "%HERE%route.cfg" ("%ADB%" push "%HERE%route.cfg" /data/local/tmp/hakux/ >nul) else ("%ADB%" shell rm -f /data/local/tmp/hakux/route.cfg)
 if /i "%1"=="watch" goto watch
 if /i "%1"=="stop" (
   "%ADB%" shell sh /data/local/tmp/hakux/route.sh stop
@@ -103,7 +115,7 @@ git -C "%RES%" config user.name "hakuX route runner"
 git -C "%RES%" config user.email "route-runner@users.noreply.github.com"
 git -C "%RES%" config core.autocrlf false
 git -C "%RES%" pull -q --ff-only origin diag-results >nul 2>nul
-set "XF=*.pftrace route.pid"
+set "XF=*.pftrace perf.data route.pid"
 if "%UPLOAD_TRACES%"=="1" set "XF=route.pid"
 robocopy "%HERE%routes" "%RES%\routes" /E /NFL /NDL /NJH /NJS /NP /XF %XF% >nul
 if errorlevel 8 (echo results not uploaded: copying them failed & goto :eof)

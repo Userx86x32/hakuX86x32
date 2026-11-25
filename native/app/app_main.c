@@ -497,6 +497,20 @@ static void make_hdd(const char *root)
     }
 }
 
+/* debug.hakux.opts: an option the property names too (by its name, the
+ * text before "=", or the whole option), the property's replacing it. */
+static bool opt_overridden(const char *arg, const char *const *extra, int n)
+{
+    const char *eq = strchr(arg, '=');
+    const size_t len = eq ? (size_t)(eq - arg) + 1 : strlen(arg) + 1;
+    for (int i = 0; i < n; i++) {
+        if (!strncmp(arg, extra[i], len - 1) && (extra[i][len - 1] == '=' || (!eq && !extra[i][len - 1]))) {
+            return true;
+        }
+    }
+    return false;
+}
+
 EXPORT int SDL_main(int argc, char *argv[])
 {
     if (argc < 3) {
@@ -556,31 +570,49 @@ EXPORT int SDL_main(int argc, char *argv[])
     }
     NcOptions opt;
     nc_options_init(&opt);
-    for (int i = 3; i < argc; i++) {
-        if (nc_option(&opt, argv[i])) {
+    /* debug: debug.hakux.opts="name=value name=value" (a property holds 91
+     * characters): options over the app's, each replacing the app's option
+     * of the same name ("vkdriver=none": the system's Vulkan driver), for
+     * scripted variants (tools/diag/route.sh: render scale, async shaders,
+     * the driver, a mod manifest) without touching the app's settings */
+    char opts[PROP_VALUE_MAX] = "";
+    const char *extra[16];
+    int nextra = 0;
+    if (hle_prop_get("debug.hakux.opts", opts) > 0) {
+        for (char *save = NULL, *t = strtok_r(opts, " ;", &save); t && nextra < 16; t = strtok_r(NULL, " ;", &save)) {
+            extra[nextra++] = t;
+            nc_log("hakuX-app", "debug.hakux.opts: %s", t);
+        }
+    }
+    for (int i = 3; i < argc + nextra; i++) {
+        const char *a = i < argc ? a : extra[i - argc];
+        if (i < argc && opt_overridden(a, extra, nextra)) {
+            continue;
+        }
+        if (nc_option(&opt, a)) {
             continue;                           /* the core's (native/core/options.h) */
         }
-        if (!strcmp(argv[i], "padinput=sdl")) {
+        if (!strcmp(a, "padinput=sdl")) {
             g_sdl_pads = true;
         }
-        if (!strncmp(argv[i], "aspect=", 7)) {
-            const char *a = argv[i] + 7;
-            nc_present_set_aspect(!strcmp(a, "4:3")       ? NC_ASPECT_4_3
-                                  : !strcmp(a, "16:9")    ? NC_ASPECT_16_9
-                                  : !strcmp(a, "stretch") ? NC_ASPECT_STRETCH
-                                                          : NC_ASPECT_AUTO);
-            nc_log("hakuX-app", "aspect ratio %s", a);
+        if (!strncmp(a, "aspect=", 7)) {
+            const char *asp = a + 7;
+            nc_present_set_aspect(!strcmp(asp, "4:3")       ? NC_ASPECT_4_3
+                                  : !strcmp(asp, "16:9")    ? NC_ASPECT_16_9
+                                  : !strcmp(asp, "stretch") ? NC_ASPECT_STRETCH
+                                                            : NC_ASPECT_AUTO);
+            nc_log("hakuX-app", "aspect ratio %s", asp);
         }
-        if (!strncmp(argv[i], "fxaa=", 5)) {
-            nc_present_set_fxaa(atoi(argv[i] + 5) != 0);
+        if (!strncmp(a, "fxaa=", 5)) {
+            nc_present_set_fxaa(atoi(a + 5) != 0);
         }
-        if (!strncmp(argv[i], "upscale=", 8)) {
-            nc_present_set_upscale(!strcmp(argv[i] + 8, "sgsr") ? NC_UPSCALE_SGSR : NC_UPSCALE_BILINEAR);
+        if (!strncmp(a, "upscale=", 8)) {
+            nc_present_set_upscale(!strcmp(a + 8, "sgsr") ? NC_UPSCALE_SGSR : NC_UPSCALE_BILINEAR);
         }
         /* vkdriver=<driver dir>|<library>|<hook library dir>: the custom
          * Vulkan driver chosen in the settings (Turnip), via adrenotools. */
-        if (!strncmp(argv[i], "vkdriver=", 9)) {
-            nc_vk_driver_load(argv[i] + 9);
+        if (!strncmp(a, "vkdriver=", 9) && strcmp(a + 9, "none")) {
+            nc_vk_driver_load(a + 9);
         }
     }
     nc_options_apply(&opt);
