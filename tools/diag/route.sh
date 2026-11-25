@@ -645,14 +645,17 @@ cmd_clean() {
 }
 
 # The last detached command: "running|<command>|", "done|<command>|" (its
-# batch finished), "stopped|<command>|" (it ended without finishing:
-# stopped, killed, failed), or "none||".
+# batch finished), "failed|<command>|" (it stopped on an error of its own),
+# "stopped|<command>|" (it ended without finishing or an error: killed, as
+# by Auto Blocker, or stopped), or "none||".
 cmd_status() {
   c=$(cat "$OUT/console.cmd" 2>/dev/null)
   if [ -f "$OUT/route.pid" ] && kill -0 "$(cat "$OUT/route.pid")" 2>/dev/null; then
     st=running
   elif grep -q "^\[route\] batch done" "$OUT/console.txt" 2>/dev/null; then
     st=done
+  elif grep -q "^\[route\] error:" "$OUT/console.txt" 2>/dev/null; then
+    st=failed        # it stopped on an error of its own (not killed): retrying won't help
   elif [ -n "$c" ]; then
     st=stopped
   else

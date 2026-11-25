@@ -184,6 +184,8 @@ check 'grep -q "batch done" "$M/watch.log"'
 check '[ "$(ls -d "$M"/out/auto-2*/0* | wc -l)" = 3 ]'
 check 'grep -q "^\[route\] finished" "$M/watch.log"'
 check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "done|auto|" ]'
+echo "[route] error: couldn't copy the route into the app (0 of 0 lines)" > "$M/out/console.txt"
+check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "failed|auto|" ]'
 echo "stop: not finished" > "$M/out/console.txt"
 check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "stopped|auto|" ]'
 exit $fail' EXIT
@@ -324,6 +326,8 @@ check 'grep -q "batch done" "$M/watch.log"'
 check '[ "$(ls -d "$M"/out/auto-2*/0* | wc -l)" = 2 ]'
 check 'grep -q "^\[route\] finished" "$M/watch.log"'
 check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "done|auto|" ]'
+echo "[route] error: couldn't copy the route into the app (0 of 0 lines)" > "$M/out/console.txt"
+check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "failed|auto|" ]'
 echo "stop: not finished" > "$M/out/console.txt"
 check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "stopped|auto|" ]'
 exit $fail

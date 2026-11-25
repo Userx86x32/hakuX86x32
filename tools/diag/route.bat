@@ -154,8 +154,16 @@ call :wait_phone
 call :phone_status
 if "%ST%"=="running" goto queue_watch
 if "%ST%"=="done" if "%STC%"=="%NEXT%" goto queue_finished
+if "%ST%"=="failed" goto queue_failed
 echo [%TIME%] queue: "%NEXT%" ended without finishing (Auto Blocker or the game closing): again
 goto queue_try
+rem the runner stopped on an error of its own: the same again would fail the same way
+:queue_failed
+echo.
+echo [%TIME%] queue: stopped. "%NEXT%" failed with:
+"%ADB%" shell grep "^.route. error:" /sdcard/hakux_diag/routes/console.txt
+echo Fix that, then run "route queue" again: it starts with "%NEXT%".
+goto :eof
 :queue_finished
 >> "%QD%" echo %NEXT%
 echo [%TIME%] queue: "%NEXT%" done
