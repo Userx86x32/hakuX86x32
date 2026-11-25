@@ -48,7 +48,9 @@ if [ "$1" = debug.hakux.state ] && [ "${2%%:*}" = load ] && [ -f "$M/pid" ]; the
     sleep 1
     case "$env" in
     NC_PAD_SCRIPT=@*)
-      log hakuX-native-usb "pad script: 3 steps, the last ending at frame 90 (waits for a savestate's load)"
+      # (old_apk: a build without NC_PAD_STATE, which doesn't wait)
+      w=" (waits for a savestate's load)"; [ -f "$M/old_apk" ] && w=
+      log hakuX-native-usb "pad script: 3 steps, the last ending at frame 90$w"
       log hakuX-native-usb "pad script: started (frame 0)"
       log hakuX-native-irq "line 3 delivered 12.5 ms after it rose: 2 refusals, first IRQL at or above it (IRQL 26, ISR line -1, thread t4); the guest CPU's thread ran 3.0 ms of it, waited for a host CPU 9.0 ms"
       log hakuX-hle-pb "kicks 1000 words 50000 headers 1 methods 2 faults 0 GET 0 PUT 0 binds 1 semaphores 2 flips 100 traps 0 (x)"
@@ -214,6 +216,20 @@ check 'grep -q "hakuX-native-irq:V" "$M/logcat_args" && grep -q "hakuX-hle-pb:V"
 check 'grep -q "^02-bower-spin0,.*,0,1,0,0,1,0,12.5,12.5,3.0,3.0,9.0,1,1000,50000,0$" "$B/summary.csv"'
 check 'grep -q "^bower/spin0 .* 0 " "$B/report.txt" && grep -q "^Late interrupts" "$B/report.txt"'
 check '[ -z "$(cat "$M/props/debug.hakux.pbspin")" ] && [ -z "$(cat "$M/props/debug.hakux.env2")" ]'
+
+echo "== preflight: before a queue, one replay start checked"
+rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
+pre=0; sh "$ROOT/tools/diag/route.sh" preflight > "$M/pre.log" 2>&1 || pre=$?
+cat "$M/pre.log"
+check '[ $pre = 0 ] && grep -q "ok: pad script: .*(waits for a savestate.s load)" "$M/pre.log" && grep -q "preflight ok" "$M/pre.log"'
+check 'grep -q "ok: debug.hakux.env2=NC_PAD_STATE=1;NC_IRQ_SCHED=1" "$M/pre.log" && grep -q "ok: the game read NC_IRQ_SCHED=1" "$M/pre.log"'
+check 'grep -q "apk_branch=claude-vibrant-cerf-lmdbik" "$M/pre.log" && grep -q "^preflight=ok" "$M/out/preflight/run.txt"'
+check '[ -z "$(cat "$M/props/debug.hakux.env2")" ] && [ "$(cat "$M/props/debug.hakux.env")" = NC_TRACE_X=1 ]'
+echo "== preflight: an APK whose replay doesn't wait for the savestate fails it"
+rm -f "$M/pid" "$M/booted"; : > "$M/logcat"; touch "$M/old_apk"
+pre=0; sh "$ROOT/tools/diag/route.sh" preflight > "$M/pre2.log" 2>&1 || pre=$?
+rm -f "$M/old_apk"
+check '[ $pre = 1 ] && grep -q "FAILED: no \"(waits for a savestate.s load)\"" "$M/pre2.log" && grep -q "^preflight=failed" "$M/out/preflight/run.txt"'
 
 echo "== suite: a cold start with hints off (A) against the default (B); the probe swaps to simpleperf"
 : > "$M/setprops"; rm -f "$M/pid" "$M/booted"; : > "$M/logcat"

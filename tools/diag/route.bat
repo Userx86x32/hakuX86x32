@@ -47,7 +47,11 @@ set "REPO=https://github.com/Userx86x32/hakuX86x32.git"
 set "RES=%HERE%results-repo"
 if /i "%1"=="upload" set "UPLOAD_AFTER=1"
 set "ADB=adb"
-set "APK_URL=https://github.com/Userx86x32/hakuX86x32/releases/download/build-optimized-test-v4-15/hakuX-debug-optimized-test-v4-15-d44243f-sd865up.apk"
+rem The test APK: a build of claude/eager-franklin-417v0b (release
+rem build-claude-eager-franklin-417v0b-<n>), with this runner's native side
+rem (NC_PAD_STATE: the replay waits for the savestate's load; debug.hakux.opts).
+rem Not optimized-test-v4's builds: they lack it. Empty: route install <file or URL>.
+set "APK_URL="
 where adb >nul 2>nul || if exist "%HERE%platform-tools\adb.exe" (set "ADB=%HERE%platform-tools\adb.exe") else if exist "%HERE%adb.exe" (set "ADB=%HERE%adb.exe") else if exist "C:\hakuX-tests\platform-tools\adb.exe" (set "ADB=C:\hakuX-tests\platform-tools\adb.exe") else if exist "C:\hakuX-tests\adb.exe" (set "ADB=C:\hakuX-tests\adb.exe") else (echo adb not found: put this file next to adb.exe or platform-tools & exit /b 1)
 set "PKG=com.rfandango.haku_x.debug"
 if /i "%1"=="queue" goto queue
@@ -91,6 +95,10 @@ rem the APK: a file or URL (%1 of the call), else the test build
 :install_apk
 set "APK=%~1"
 if "%APK%"=="" set "APK=%APK_URL%"
+if "%APK%"=="" (
+  echo no test APK set: route install ^<hakuX-debug-claude-eager-franklin-417v0b-...apk file or URL^>
+  exit /b 1
+)
 rem the APK's file name (a URL's last part), recorded on the phone for batch.txt
 set "APKNAME=%APK%"
 :apkname_cut
@@ -130,6 +138,19 @@ if not exist "%Q%" call :queue_default
 if not exist "%QD%" type nul > "%QD%"
 echo queue: %Q%  (finished: %QD%; delete it to run everything again)
 echo Stop with Ctrl+C here, then: route stop
+rem before the first batch (unless one is running): one replay start, checked
+call :wait_phone
+call :push_scripts || (echo the scripts couldn't be copied to the phone & goto :eof)
+call :phone_status
+if not "%ST%"=="running" (
+  echo [%TIME%] queue: preflight ^(the replay waits for the savestate; NC_IRQ_SCHED=1 in debug.hakux.env2^)
+  "%ADB%" shell "sh /data/local/tmp/hakux/route.sh preflight; echo preflight-exit=$?" > "%HERE%preflight.txt" 2>&1
+  type "%HERE%preflight.txt"
+  findstr /c:"preflight-exit=0" "%HERE%preflight.txt" >nul || (
+    echo [%TIME%] queue: not started, the preflight failed ^(above; the log: routes\preflight\logcat.txt after route pull^)
+    goto :eof
+  )
+)
 :queue_next
 set "NEXT="
 for /f "usebackq eol=# delims=" %%L in ("%Q%") do if not defined NEXT (

@@ -28,6 +28,10 @@
 #   clean
 #       The properties the runner sets, cleared (after a batch was cut off).
 #   start <command ...> / watch / stop / status / report <batch dir>
+#   preflight
+#       Before a queue: one replay start, checked (it waits for the
+#       savestate's load; NC_IRQ_SCHED=1 in debug.hakux.env2 and the game's
+#       environment); the installed APK named. Fails when a check does.
 #   apkrecord <apk file name>
 #       Notes the APK route.bat just installed (its name, the installed
 #       APK's sha256) for batch.txt's build identity.
@@ -515,6 +519,11 @@ check_run() {
   if [ -n "$o" ] && [ "$(opts_applied "$rd/logcat.txt" "$spid")" != "$o" ]; then
     bad="${bad:+$bad; }debug.hakux.opts '$o' not read by the game (this APK is older than build 14, or the property didn't reach it)"
   fi
+  # the replay waited for the savestate's load (NC_PAD_STATE: a build with
+  # this branch's native changes); without it, it ran from the game's boot
+  if ! grep "hakuX-native-usb( *$spid): pad script: " "$rd/logcat.txt" | grep -q "(waits for a savestate's load)"; then
+    bad="${bad:+$bad; }the replay didn't wait for the savestate's load (no \"(waits for a savestate's load)\": this APK lacks NC_PAD_STATE)"
+  fi
   if [ "$IRQ_SCHED" = 1 ] && ! grep -q "hakuX-app( *$spid): debug.hakux.env: NC_IRQ_SCHED=1" "$rd/logcat.txt"; then
     bad="${bad:+$bad; }NC_IRQ_SCHED=1 not in the game's environment (debug.hakux.env2)"
   fi
@@ -783,6 +792,59 @@ cmd_run() {
 
 RUNFAILS=                   # the variants whose run failed its check (one each is allowed)
 
+# Before a queue: one load of the first scene with a savestate, checked as
+# a run is (the replay waits for the savestate's load; NC_IRQ_SCHED=1 set
+# in debug.hakux.env2 and in the game's environment), and the APK named.
+# Its log and result in $OUT/preflight/; 1 when a check fails.
+cmd_preflight() {
+  if [ -f "$OUT/route.pid" ] && kill -0 "$(cat "$OUT/route.pid")" 2>/dev/null; then
+    die "a batch is running: preflight only before one"
+  fi
+  mkdir -p "$OUT" || die "can't write $OUT"
+  save_props
+  wait_game
+  pf_scene= pf_slot=
+  for sc in $SCENES; do
+    slot_exists "${sc#*:}" && { pf_scene=${sc%%:*}; pf_slot=${sc#*:}; break; }
+  done
+  [ -n "$pf_scene" ] || die "preflight: no scene has a savestate (SCENES=\"$SCENES\")"
+  ready_scene "$pf_scene"
+  RUN_DIR=$OUT/preflight; rm -rf "$RUN_DIR"; mkdir -p "$RUN_DIR"
+  setprop debug.hakux.env2 "$(run_env2)"
+  { echo "scene=$pf_scene"; echo "slot=$pf_slot"; echo "debug.hakux.env2=$(getprop debug.hakux.env2)"
+    echo "mods_expected=?"; echo "build:"; apk_identity; } > "$RUN_DIR/run.txt"
+  sed -n 's/^  //p' "$RUN_DIR/run.txt" | grep '^apk_' | while read -r l; do say "$l"; done
+  start_capture "$RUN_DIR"
+  load_slot "$pf_slot"
+  ok=1
+  if wait_log "$RUN_DIR/logcat.txt" "pad script: started" 120; then
+    spid=$(grep -m1 "pad script: started" "$RUN_DIR/logcat.txt" | sed -n 's/^[^(]*( *\([0-9]*\)).*/\1/p')
+    l=$(grep "hakuX-native-usb( *$spid): pad script: " "$RUN_DIR/logcat.txt" | grep -m1 "(waits for a savestate's load)")
+    if [ -n "$l" ]; then say "ok: ${l#*): }"; else say "FAILED: no \"(waits for a savestate's load)\" (this APK lacks NC_PAD_STATE)"; ok=; fi
+    if [ "$IRQ_SCHED" = 1 ]; then
+      e2=$(sed -n 's/^debug.hakux.env2=//p' "$RUN_DIR/run.txt")
+      case ";$e2;" in
+        *";NC_IRQ_SCHED=1;"*) say "ok: debug.hakux.env2=$e2";;
+        *) say "FAILED: debug.hakux.env2 is '$e2', without NC_IRQ_SCHED=1"; ok=;;
+      esac
+      if grep -q "hakuX-app( *$spid): debug.hakux.env: NC_IRQ_SCHED=1" "$RUN_DIR/logcat.txt"; then
+        say "ok: the game read NC_IRQ_SCHED=1 (its debug.hakux.env: line)"
+      else
+        say "FAILED: the game didn't log debug.hakux.env: NC_IRQ_SCHED=1"; ok=
+      fi
+    fi
+  else
+    say "FAILED: the replay didn't start in 120 s (see $RUN_DIR/logcat.txt)"; ok=
+  fi
+  stop_capture
+  restore
+  setprop debug.hakux.state ''
+  if [ -n "$ok" ]; then echo "preflight=ok" >> "$RUN_DIR/run.txt"; say "preflight ok"; return 0; fi
+  echo "preflight=failed" >> "$RUN_DIR/run.txt"
+  say "preflight FAILED (log: $RUN_DIR/logcat.txt)"
+  return 1
+}
+
 # The 30-minute batch (docs/diag-suite.md): per scene, RUNS measurement runs
 # A B A B ..., then one probe run on A; the probes swap scenes each batch.
 cmd_suite() {
@@ -949,5 +1011,6 @@ case "$1" in
   run) shift; cmd_run "$@";;
   report) shift; sh "$HERE/route_report.sh" "$@";;
   apkrecord) shift; cmd_apkrecord "$@";;
-  *) sed -n '2,59p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
+  preflight) cmd_preflight;;
+  *) sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
 esac

@@ -162,9 +162,24 @@ instead (any build), and put back at the end.
 
 **v4 queue** (`queue.txt` made by `route queue`; delete an old `queue.txt`
 and `queue.done` to get it): V9 (200 vs 0), V8 (`vcpucore` 1 vs 0, 6 runs),
-V10, then V9 with 50. Install the v4 APK first: `route install` downloads
-the newest `build-optimized-test-v4` release's APK (build 15) into the test
+V10, then V9 with 50.
+
+**The APK** is a build of `claude/eager-franklin-417v0b` (release
+`build-claude-eager-franklin-417v0b-<n>`: this runner's native side merged
+with `optimized-test-v4`'s `debug.hakux.pbspin`), not `optimized-test-v4`'s
+own builds: they lack `NC_PAD_STATE`, so a replay wouldn't wait for the
+savestate's load. `route install <file or URL>` downloads it into the test
 folder under its own name and records that name for `batch.txt`.
+
+**Preflight.** `route queue` first runs `route.sh preflight` (unless a batch
+is running): one savestate load of the first scene with a savestate,
+checking that the replay's `pad script: ... (waits for a savestate's load)`
+line is there and that `debug.hakux.env2` held `NC_IRQ_SCHED=1` and the game
+logged `debug.hakux.env: NC_IRQ_SCHED=1` (the app logs both properties'
+entries under that one prefix: the runner's own `debug.hakux.env2=` record
+tells them apart). It names the installed APK. If a check fails, the queue
+doesn't start (`preflight.txt` beside route.bat; the log in
+`routes/preflight/`). Every run is checked the same way.
 
 Order: V1, V2, V4 first (they bear on the dominant "flipped late though
 ready" stutters); V3, V5 for pop-in and GPU; V6-V8 as time allows.
@@ -212,8 +227,8 @@ wood` (with `SLOT=2` in `route.cfg`) records one you play instead.
 
 ## Requirements
 
-- The hakuX debug APK installed with `route install` (so `batch.txt` names
-  it); a build after 14 for the app-setting variants (`debug.hakux.opts`).
+- The hakuX debug APK built from `claude/eager-franklin-417v0b`, installed
+  with `route install` (so `batch.txt` names it).
   The mod variants, thread stats and display timing work with any build.
 - Savestates: slot 1 in Bowerstone, slot 2 in Great Wood.
 - Git for Windows on the PC for the uploads.
