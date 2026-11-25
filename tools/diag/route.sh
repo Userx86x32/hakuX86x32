@@ -45,6 +45,10 @@
 #       the core applied (its hakuX-native-mods lines) and fails otherwise;
 #       a variant failing twice stops the batch.
 #   cold=1: the shader and pipeline caches cleared before the run
+#   pbspin=<us>: the decoder's spin before sleeping (debug.hakux.pbspin, v4;
+#       read within a second; unset: 200), checked against its "decoder spin
+#       before sleeping" line at the run's end (none: 200)
+# Every run also gets NC_IRQ_SCHED=1 (IRQ_SCHED) in debug.hakux.env2.
 # Each run starts from the variant's settings alone: whatever another
 # variant set is put back first.
 #
@@ -67,6 +71,8 @@ COOL_MAX=10                 # ... for at most this many seconds (the game runs o
                             # waiting barely cools it: 90 s never got 50-58 C under 45 C)
 WATCH=0x862494              # debug.hakux.watch: Fable's presentation interval (D3D)
 PROBE_SECS=20               # a probe's length, mid-route
+IRQ_SCHED=1                 # NC_IRQ_SCHED for every run (hakuX-native-irq: a late interrupt's
+                            # thread wait), in debug.hakux.env2 beside the replay's NC_PAD_STATE
 CFG=${HAKUX_CFG:-$HERE/route.cfg}
 if [ -f "$CFG" ]; then
   tr -d '\r' < "$CFG" > "${HAKUX_TMP:-/data/local/tmp}/hakux_route_cfg" &&
@@ -77,7 +83,7 @@ OUT=${HAKUX_OUT:-/sdcard/hakux_diag/routes}
 TMPD=${HAKUX_TMP:-/data/local/tmp}      # (overrides for the host test, tests/diag)
 TAGS="hakuX-hle-hitch:V hakuX-native:V hakuX-native-mods:V hakuX-app:V hakuX-native-usb:V
   hakuX-hle-pipe:V hakuX-hle:V hakuX-hle-prof:V hakuX-apu:V hakuX-native-watch:V hakuX-native-perf:V
-  hakuX-native-vbl:V"
+  hakuX-native-vbl:V hakuX-native-irq:V hakuX-hle-pb:V"
 
 [ -n "$HAKUX_PIDFILE" ] && echo $$ > "$HAKUX_PIDFILE"   # started detached (route.sh start)
 say() { echo "[route] $*"; }
@@ -92,7 +98,7 @@ die() { echo "[route] error: $*" >&2; restore; exit 1; }
 # (opts, perf, perfsec) are cleared at the end, not put back.
 SAVED_PROPS="debug.hakux.env debug.hakux.env2 debug.hakux.vcpucore debug.hakux.adpf"
 RUNNER_PROPS="debug.hakux.opts debug.hakux.perf debug.hakux.perfsec"
-without_pad() { echo "$1" | tr ';' '\n' | grep -v '^NC_PAD_' | tr '\n' ';' | sed 's/;*$//'; }
+without_pad() { echo "$1" | tr ';' '\n' | grep -v -e '^NC_PAD_' -e '^NC_IRQ_SCHED=' | tr '\n' ';' | sed 's/;*$//'; }
 save_props() {
   : > $TMPD/hakux_route_props
   for p in $SAVED_PROPS $VARIANT_PROPS; do
@@ -473,6 +479,26 @@ opts_applied() {
   grep "hakuX-app( *$2): debug.hakux.opts: " "$1" | sed 's/^.*debug.hakux.opts: //' | tr '\n' ' ' | sed 's/ $//'
 }
 
+# The run checked at its end: the decoder's spin (debug.hakux.pbspin) is the
+# variant's. The decoder logs "decoder spin before sleeping: N us" only when
+# the value changes from its 200 us default: no line is 200. 1, with failed=.
+check_run_end() {
+  rd=$1
+  grep -q '^debug.hakux.pbspin=' "$rd/run.txt" || [ -n "$PBSPIN_BATCH" ] || return 0
+  spid=$(grep -m1 "pad script: started" "$rd/logcat.txt" | sed -n 's/^[^(]*( *\([0-9]*\)).*/\1/p')
+  want=$(sed -n 's/^debug.hakux.pbspin=//p' "$rd/run.txt")
+  [ -n "$want" ] || want=$(saved_value debug.hakux.pbspin)
+  case "$want" in ''|*[!0-9]*) want=200;; esac
+  [ "$want" -gt 2000 ] && want=2000
+  got=$(grep "hakuX-hle-pb( *$spid): decoder spin before sleeping: " "$rd/logcat.txt" | tail -n 1 |
+    sed 's/^.*sleeping: \([0-9]*\) us.*/\1/')
+  echo "pbspin_applied=${got:-200}" >> "$rd/run.txt"
+  [ "${got:-200}" = "$want" ] && return 0
+  echo "failed=pbspin: the variant's is $want us, the decoder spun ${got:-200} us" >> "$rd/run.txt"
+  say "run $NRUN FAILED: pbspin $want us asked, the decoder logged ${got:-200} us"
+  return 1
+}
+
 # The run checked once its replay started: the mods the core applied are
 # the variant's, and its debug.hakux.opts were read. 1, with failed= in
 # run.txt, when not.
@@ -488,6 +514,9 @@ check_run() {
   o=$(sed -n 's/^debug.hakux.opts=//p' "$rd/run.txt")
   if [ -n "$o" ] && [ "$(opts_applied "$rd/logcat.txt" "$spid")" != "$o" ]; then
     bad="${bad:+$bad; }debug.hakux.opts '$o' not read by the game (this APK is older than build 14, or the property didn't reach it)"
+  fi
+  if [ "$IRQ_SCHED" = 1 ] && ! grep -q "hakuX-app( *$spid): debug.hakux.env: NC_IRQ_SCHED=1" "$rd/logcat.txt"; then
+    bad="${bad:+$bad; }NC_IRQ_SCHED=1 not in the game's environment (debug.hakux.env2)"
   fi
   [ -z "$bad" ] && return 0
   echo "failed=$bad" >> "$rd/run.txt"
@@ -572,6 +601,7 @@ cool_down() {
 one_run() {
   scene=$1 slot=$2 v=$3 kind=$4
   vname=${3%%:*}                    # (set_variant reuses v: sh has no local variables)
+  pbfail=
   NRUN=$((NRUN + 1))
   label=${v%%:*}
   [ "$kind" = measure ] || label=probe-$kind
@@ -586,9 +616,11 @@ one_run() {
   # the guest word watch, set again each run (a restart clears properties;
   # each new game process reads it again); left set afterwards
   setprop debug.hakux.watch "$WATCH"
+  setprop debug.hakux.env2 "$(run_env2)"
   {
     echo "variant=${v%%:*}"; echo "kind=$kind"; echo "scene=$scene"; echo "slot=$slot"
     echo "debug.hakux.watch=$WATCH"
+    echo "debug.hakux.env2=$(run_env2)"
     set_variant "$v" "$slot"
     echo "start=$(date)"; echo "start_gpuss_C=$(gpuss_c)"
     echo "battery_dC=$(cat /sys/class/power_supply/battery/temp 2>/dev/null)"
@@ -627,6 +659,7 @@ one_run() {
     snap_threads "$RUN_DIR/schedstat_end.txt"
     dump_timestats "$RUN_DIR"
     sleep 3
+    check_run_end "$RUN_DIR" || pbfail=1
   else
     say "run $NRUN: the replay didn't start (see $RUN_DIR/logcat.txt)"
   fi
@@ -634,6 +667,12 @@ one_run() {
   { echo "end=$(date)"; echo "power at end:"; power_state; } >> "$RUN_DIR/run.txt"
   [ -n "$(native_pid)" ] || say "run $NRUN: the game closed (see $RUN_DIR/logcat.txt)"
   setprop debug.hakux.state ''
+  if [ -n "$pbfail" ]; then
+    case " $RUNFAILS " in
+      *" $vname "*) die "variant $vname failed its check twice ($(sed -n 's/^failed=//p' "$RUN_DIR/run.txt"))";;
+    esac
+    RUNFAILS="$RUNFAILS $vname"
+  fi
 }
 
 # Steps in a route file (0: none, or an empty file left by an old runner).
@@ -648,8 +687,11 @@ ready_scene() {
   fi
   push_route "$1"
   setprop debug.hakux.env "NC_PAD_SCRIPT=@$APPDIR/$1.txt"
-  setprop debug.hakux.env2 "NC_PAD_STATE=1"
+  setprop debug.hakux.env2 "$(run_env2)"
 }
+# debug.hakux.env2 for a replay: the savestate wait, and NC_IRQ_SCHED (read
+# at game start: set again before every run)
+run_env2() { if [ "$IRQ_SCHED" = 1 ]; then echo "NC_PAD_STATE=1;NC_IRQ_SCHED=1"; else echo "NC_PAD_STATE=1"; fi; }
 
 # ---- commands ----
 # A route with no one playing (sticks only), in frames since the load: a
@@ -719,6 +761,7 @@ cmd_run() {
   mkdir -p "$OUT" || die "can't write $OUT"
   VARIANT_PROPS=$(variant_props "$@")
   case " $* " in *[:,]mod=*) MOD_BATCH=1;; esac
+  case " $* " in *[:,]pbspin=*) PBSPIN_BATCH=1;; esac
   save_props
   ready_scene "$name"
   new_batch "$name" "$@"
@@ -747,6 +790,7 @@ cmd_suite() {
   mkdir -p "$OUT" || die "can't write $OUT"
   VARIANT_PROPS=$(variant_props "$@")
   case " $* " in *[:,]mod=*) MOD_BATCH=1;; esac
+  case " $* " in *[:,]pbspin=*) PBSPIN_BATCH=1;; esac
   save_props
   name=suite; [ -n "$SUITE_NAME" ] && name=$SUITE_NAME
   # the same suite again after it was cut off (Auto Blocker, the cable): its
@@ -905,5 +949,5 @@ case "$1" in
   run) shift; cmd_run "$@";;
   report) shift; sh "$HERE/route_report.sh" "$@";;
   apkrecord) shift; cmd_apkrecord "$@";;
-  *) sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
+  *) sed -n '2,59p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
 esac

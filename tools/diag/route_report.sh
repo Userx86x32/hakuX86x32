@@ -6,7 +6,7 @@
 # A batch dir holds one dir per run (logcat.txt, sensors.csv, run.txt).
 B=${1:?usage: sh route_report.sh <batch dir>}
 SUM=$B/summary.csv
-echo "run,variant,secs,frames,fps,stutters,per_min,over_ms,worst_ms,hangs,work_ms,max_gpuss_C,max_batt_C,min_cap_big_khz,min_cap_prime_khz,cpu7_avg_khz,gpu_avg_mhz,vbl_answer_avg_ms,vbl_answer_max_ms,vbl_over_2ms,vbl_over_8ms,vbl_unanswered,flip_delay_avg_ms,flip_delay_max_ms,present_interval_start,present_interval_changes,present_interval_values,kind,start_gpuss_C,vcpu_run_ms,vcpu_wait_ms,decode_run_ms,decode_wait_ms,render_run_ms,render_wait_ms,main_run_ms,main_wait_ms,apu_run_ms,apu_wait_ms,jit_drops,jit_drops_max_10s,sf_frames,sf_gaps,sf_worst_gap_ms,sf_median_ms,sf_source,mods" > "$SUM"
+echo "run,variant,secs,frames,fps,stutters,per_min,over_ms,worst_ms,hangs,work_ms,max_gpuss_C,max_batt_C,min_cap_big_khz,min_cap_prime_khz,cpu7_avg_khz,gpu_avg_mhz,vbl_answer_avg_ms,vbl_answer_max_ms,vbl_over_2ms,vbl_over_8ms,vbl_unanswered,flip_delay_avg_ms,flip_delay_max_ms,present_interval_start,present_interval_changes,present_interval_values,kind,start_gpuss_C,vcpu_run_ms,vcpu_wait_ms,decode_run_ms,decode_wait_ms,render_run_ms,render_wait_ms,main_run_ms,main_wait_ms,apu_run_ms,apu_wait_ms,jit_drops,jit_drops_max_10s,sf_frames,sf_gaps,sf_worst_gap_ms,sf_median_ms,sf_source,mods,pbspin_us,irq_late,irq_isr,irq_if0,irq_irql,irq_none,irq_late_avg_ms,irq_late_max_ms,irq_ran_avg_ms,irq_ran_max_ms,irq_hostwait_avg_ms,pb_lines,pb_kicks,pb_words,pb_flips" > "$SUM"
 : > "$B/reasons.txt"; : > "$B/watch.txt"; : > "$B/failed.txt"
 
 for R in "$B"/*/; do
@@ -236,7 +236,44 @@ for R in "$B"/*/; do
     fi
   esac
   [ -n "$sf" ] || sf=",NA,NA,NA,NA,NA"
-  echo "$(cat "$R/.row"),$kind,${start_c:-NA}$sched,$jit,$jitmax$sf,${mods:-NA}" >> "$SUM"
+  # the decoder's spin (the last "decoder spin before sleeping" of the
+  # replay's process; none: its 200 us default), the late interrupts
+  # (hakuX-native-irq: "line N delivered X ms after it rose: R refusals,
+  # first <why> (IRQL ...); the guest CPU's thread ran Y ms of it[, waited
+  # for a host CPU Z ms]", one over 8 ms each) by their first reason, and
+  # the decoder's statistics lines (hakuX-hle-pb "kicks K words W ... flips
+  # F": kicks and words since the last line, flips in all), in the window
+  pbspin=$(sed -n 's/^pbspin_applied=//p' "$R/run.txt" 2>/dev/null)
+  extra=$(awk -v spid="$spid" -v t0="$w0" -v t1="$w1" -v pbspin="$pbspin" '
+    function secs(t,  a) { split(t, a, ":"); return a[1] * 3600 + a[2] * 60 + a[3] }
+    function pid(line) { return match(line, /\( *[0-9]+\)/) ? substr(line, RSTART + 1, RLENGTH - 2) + 0 : -1 }
+    function after(line, key,  i) { i = index(line, key); return i ? substr(line, i + length(key)) + 0 : -1 }
+    pid($0) != spid { next }
+    /hakuX-hle-pb.*decoder spin before sleeping: / { sp = after($0, "sleeping: ") }
+    { t = secs($2); if (t1 < t0 && t < t0) t += 86400 }
+    t < t0 || t > (t1 < t0 ? t1 + 86400 : t1) { next }
+    /hakuX-native-irq.* delivered [0-9.]+ ms after it rose/ {
+      n++; lat = after($0, " delivered "); ls += lat; if (lat > lm) lm = lat
+      ran = after($0, "thread ran "); if (ran >= 0) { rs += ran; if (ran > rm) rm = ran }
+      hw = after($0, "waited for a host CPU "); if (hw >= 0) hs += hw
+      if (index($0, "first an ISR running")) isr++
+      else if (index($0, "first interrupts off (IF 0)")) if0++
+      else if (index($0, "first IRQL at or above it")) irql++
+      else if (index($0, "first none: no kernel entry meanwhile")) none++
+      next
+    }
+    /hakuX-hle-pb.*: kicks [0-9]+ words [0-9]+ / {
+      pl++; pk += after($0, ": kicks "); pw += after($0, " words ")
+      f = after($0, " flips "); if (pl == 1) f0 = f; f1 = f
+      next
+    }
+    END {
+      if (pbspin == "") pbspin = (sp == "" ? 200 : sp)
+      printf ",%s,%d,%d,%d,%d,%d", pbspin, n, isr, if0, irql, none
+      if (n) printf ",%.1f,%.1f,%.1f,%.1f,%.1f", ls / n, lm, rs / n, rm, hs / n; else printf ",NA,NA,NA,NA,NA"
+      if (pl) printf ",%d,%d,%d,%d\n", pl, pk, pw, f1 - f0; else printf ",0,NA,NA,NA\n"
+    }' "$R/logcat.txt")
+  echo "$(cat "$R/.row"),$kind,${start_c:-NA}$sched,$jit,$jitmax$sf,${mods:-NA}$extra" >> "$SUM"
   rm -f "$R/.row" "$R/.window"
 done
 
@@ -290,6 +327,33 @@ done
       for (i = 1; i <= nv; i++) { v = order[i]
         printf "%-22s %7s %9s %9s %8s %9s %9s %10s %-10s %s\n", v, avg(40, "%.0f"), avg(41, "%.0f"), avg(42, "%.0f"), avg(43, "%.0f"),
           (v in wst) ? sprintf("%.1f", wst[v]) : "NA", avg(45, "%.1f"), "", srcs[v], mods[v] }
+    }' "$SUM"
+  echo
+  echo "Late interrupts (hakuX-native-irq: delivered over 8 ms after the line rose; per run; by the first reason the kernel couldn't deliver it):"
+  awk -F, 'function add(k, x) { if (x != "NA") { s[k, v] += x; c[k, v]++ } }
+    function avg(k, f) { return c[k, v] ? sprintf(f, s[k, v] / c[k, v]) : "NA" }
+    NR > 1 && $28 == "measure" { v = $2; if (!(v in seen)) { seen[v] = 1; order[++nv] = v }
+      for (i = 49; i <= 54; i++) add(i, $i); add(56, $56); add(58, $58)
+      if ($55 != "NA" && $55 > lm[v]) lm[v] = $55; if ($57 != "NA" && $57 > rm[v]) rm[v] = $57 }
+    END {
+      printf "%-22s %6s %6s %6s %6s %6s %9s %9s %9s %9s %11s\n", "variant", "late", "ISR", "IF 0", "IRQL", "none", "late avg", "late max", "ran avg", "ran max", "host wait"
+      for (i = 1; i <= nv; i++) { v = order[i]
+        printf "%-22s %6s %6s %6s %6s %6s %9s %9s %9s %9s %11s\n", v, avg(49, "%.1f"), avg(50, "%.1f"), avg(51, "%.1f"), avg(52, "%.1f"), avg(53, "%.1f"),
+          avg(54, "%.1f"), (v in lm) ? sprintf("%.1f", lm[v]) : "NA", avg(56, "%.1f"), (v in rm) ? sprintf("%.1f", rm[v]) : "NA", avg(58, "%.1f") }
+      print "  (late: lines a run; ISR = an ISR running, IF 0 = interrupts off, IRQL = IRQL at or above it, none = no kernel entry"
+      print "   meanwhile; ran = ms the guest CPU'"'"'s thread ran of the delay; host wait = ms it waited for a host CPU)"
+    }' "$SUM"
+  echo
+  echo "Decoder (hle-pb thread from schedstat, ms per run; hakuX-hle-pb statistics lines summed over the replay):"
+  awk -F, 'function add(k, x) { if (x != "NA") { s[k, v] += x; c[k, v]++ } }
+    function avg(k) { return c[k, v] ? sprintf("%.0f", s[k, v] / c[k, v]) : "NA" }
+    NR > 1 && $28 == "measure" { v = $2; if (!(v in seen)) { seen[v] = 1; order[++nv] = v }
+      if (!((v, $48) in sp)) { sp[v, $48] = 1; sps[v] = sps[v] (sps[v] == "" ? "" : "/") $48 }
+      add(32, $32); add(33, $33); add(30, $30); add(31, $31); add(59, $59); add(60, $60); add(61, $61); add(62, $62) }
+    END {
+      printf "%-22s %10s %9s %9s %9s %9s %8s %9s %12s %8s\n", "variant", "pbspin us", "pb run", "pb wait", "vCPU run", "vCPU wait", "pb lines", "kicks", "words", "flips"
+      for (i = 1; i <= nv; i++) { v = order[i]
+        printf "%-22s %10s %9s %9s %9s %9s %8s %9s %12s %8s\n", v, sps[v], avg(32), avg(33), avg(30), avg(31), avg(59), avg(60), avg(61), avg(62) }
     }' "$SUM"
   echo
   echo "Failed runs (their check failed: kept out of everything above):"

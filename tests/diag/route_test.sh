@@ -33,6 +33,12 @@ if [ "$1" = debug.hakux.state ] && [ "${2%%:*}" = load ] && [ -f "$M/pid" ]; the
     # the new process: the app's options from debug.hakux.opts, and the mods
     # on in its choices (stale_mods: an app that ignores them, 60fps on)
     for o in $(cat "$M/props/debug.hakux.opts" 2>/dev/null); do log hakuX-app "debug.hakux.opts: $o"; done
+    for e in $(cat "$M/props/debug.hakux.env" "$M/props/debug.hakux.env2" 2>/dev/null | tr ';' ' '); do
+      log hakuX-app "debug.hakux.env: $e"
+    done
+    # the decoder: its spin logged when it isn't the 200 us default
+    sp=$(cat "$M/props/debug.hakux.pbspin" 2>/dev/null)
+    [ -n "$sp" ] && [ "$sp" != 200 ] && log hakuX-hle-pb "decoder spin before sleeping: $sp us (debug.hakux.pbspin)"
     if [ -f "$M/stale_mods" ]; then on=60fps; else
       on=$(tr -d '\\' < "$M/data/com.rfandango.haku_x.debug/files/mod_choices.json" 2>/dev/null |
         grep -o '"4D5300D1.1/mod/[^"]*":true' | sed 's|"4D5300D1.1/mod/||; s|".*||')
@@ -44,6 +50,8 @@ if [ "$1" = debug.hakux.state ] && [ "${2%%:*}" = load ] && [ -f "$M/pid" ]; the
     NC_PAD_SCRIPT=@*)
       log hakuX-native-usb "pad script: 3 steps, the last ending at frame 90 (waits for a savestate's load)"
       log hakuX-native-usb "pad script: started (frame 0)"
+      log hakuX-native-irq "line 3 delivered 12.5 ms after it rose: 2 refusals, first IRQL at or above it (IRQL 26, ISR line -1, thread t4); the guest CPU's thread ran 3.0 ms of it, waited for a host CPU 9.0 ms"
+      log hakuX-hle-pb "kicks 1000 words 50000 headers 1 methods 2 faults 0 GET 0 PUT 0 binds 1 semaphores 2 flips 100 traps 0 (x)"
       log hakuX-hle-hitch "stutter #1 frame 40: 120.0 ms (expected 33.3): vCPU starved 80 ms | x"
       sleep 1
       log hakuX-native-usb "pad script: done (frame 90, 3000 ms)";;
@@ -171,7 +179,7 @@ check 'grep -q "^debug.hakux.opts=$" "$B/02-bower-base/run.txt"'
 check 'grep -q "^mods_expected=40fps$" "$B/01-bower-m40/run.txt" && grep -q "^mods_applied=40fps$" "$B/01-bower-m40/run.txt"'
 check 'grep -q "^mods_expected=60fps$" "$B/02-bower-base/run.txt" && grep -q "^mods_applied=60fps$" "$B/02-bower-base/run.txt"'
 check '! grep -q "^failed=" "$B"/0*/run.txt && grep -A1 "^Failed runs" "$B/report.txt" | grep -q "^  none$"'
-check 'grep -q "^01-bower-m40,.*,40fps$" "$B/summary.csv" && grep -q "^02-bower-base,.*,60fps$" "$B/summary.csv"'
+check '[ "$(grep "^01-bower-m40," "$B/summary.csv" | cut -d, -f47)" = 40fps ] && [ "$(grep "^02-bower-base," "$B/summary.csv" | cut -d, -f47)" = 60fps ]'
 check '[ "$(cat "$A/files/mod_choices.json")" = "$CHOICES" ]'      # put back as it was
 check '[ -z "$(cat "$M/props/debug.hakux.opts")" ]'
 # the probe: its exit status in run.txt; no empty console file
@@ -190,8 +198,22 @@ check 'grep -q "^failed=mods: the variant.s are .40fps., the core applied .60fps
 check 'grep -q "run 1 FAILED" "$M/stale.log" && grep -q "error: variant m40 failed its check twice" "$M/stale.log"'
 check '[ "$(cat "$A/files/mod_choices.json")" = "$CHOICES" ]'        # put back by the error's restore
 sh "$ROOT/tools/diag/route.sh" report "$B" > /dev/null 2>&1
-check '! grep -q "^01-bower-m40," "$B/summary.csv" && grep -q "^02-bower-base,.*,60fps$" "$B/summary.csv"'
+check '! grep -q "^01-bower-m40," "$B/summary.csv" && [ "$(grep "^02-bower-base," "$B/summary.csv" | cut -d, -f47)" = 60fps ]'
 check 'grep -A3 "^Failed runs" "$B/report.txt" | grep -q "01-bower-m40 .*mods:"'
+
+echo "== suite: the decoder's spin, 200 us against 0 (v4); NC_IRQ_SCHED in every run"
+: > "$M/setprops"; rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
+flip=$(cat "$M/out/.probe_flip")
+sh "$ROOT/tools/diag/route.sh" suite spin200:pbspin=200 spin0:pbspin=0 > "$M/spin.log" 2>&1 || { cat "$M/spin.log"; exit 1; }
+echo "$flip" > "$M/out/.probe_flip"
+B=$(ls -d "$M"/out/suite-2* | tail -n 1)
+check 'grep -q "^pbspin_applied=200$" "$B/01-bower-spin200/run.txt" && grep -q "^pbspin_applied=0$" "$B/02-bower-spin0/run.txt"'
+check '! grep -q "^failed=" "$B"/0*/run.txt'
+check '[ "$(grep -c "^setprop debug.hakux.env2=NC_PAD_STATE=1;NC_IRQ_SCHED=1$" "$M/setprops")" -ge 3 ]'
+check 'grep -q "hakuX-native-irq:V" "$M/logcat_args" && grep -q "hakuX-hle-pb:V" "$M/logcat_args"'
+check 'grep -q "^02-bower-spin0,.*,0,1,0,0,1,0,12.5,12.5,3.0,3.0,9.0,1,1000,50000,0$" "$B/summary.csv"'
+check 'grep -q "^bower/spin0 .* 0 " "$B/report.txt" && grep -q "^Late interrupts" "$B/report.txt"'
+check '[ -z "$(cat "$M/props/debug.hakux.pbspin")" ] && [ -z "$(cat "$M/props/debug.hakux.env2")" ]'
 
 echo "== suite: a cold start with hints off (A) against the default (B); the probe swaps to simpleperf"
 : > "$M/setprops"; rm -f "$M/pid" "$M/booted"; : > "$M/logcat"

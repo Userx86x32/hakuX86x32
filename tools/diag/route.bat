@@ -12,6 +12,8 @@ rem                            route suite base async0:asyncpipe=0
 rem                            route suite base cold:cold=1
 rem                            route suite base sysdrv:driver=system
 rem                            route suite base x3:scale=3
+rem                            route suite spin200:pbspin=200 spin0:pbspin=0
+rem                            route suite base1 base2      (no variant: noise)
 rem   route auto             route suite x4:vcpucore=1 all:vcpucore=0
 rem   route tour bower 75    a hands-off route alone (75 seconds)
 rem   route run bower 6 x4:vcpucore=1 all:vcpucore=0   one scene (slot 1)
@@ -45,7 +47,7 @@ set "REPO=https://github.com/Userx86x32/hakuX86x32.git"
 set "RES=%HERE%results-repo"
 if /i "%1"=="upload" set "UPLOAD_AFTER=1"
 set "ADB=adb"
-set "APK_URL=https://github.com/Userx86x32/hakuX86x32/releases/download/build-claude-vibrant-cerf-lmdbik-14/hakuX-debug-claude-vibrant-cerf-lmdbik-14-e6ba66e-sd865up.apk"
+set "APK_URL=https://github.com/Userx86x32/hakuX86x32/releases/download/build-optimized-test-v4-15/hakuX-debug-optimized-test-v4-15-d44243f-sd865up.apk"
 where adb >nul 2>nul || if exist "%HERE%platform-tools\adb.exe" (set "ADB=%HERE%platform-tools\adb.exe") else if exist "%HERE%adb.exe" (set "ADB=%HERE%adb.exe") else if exist "C:\hakuX-tests\platform-tools\adb.exe" (set "ADB=C:\hakuX-tests\platform-tools\adb.exe") else if exist "C:\hakuX-tests\adb.exe" (set "ADB=C:\hakuX-tests\adb.exe") else (echo adb not found: put this file next to adb.exe or platform-tools & exit /b 1)
 set "PKG=com.rfandango.haku_x.debug"
 if /i "%1"=="queue" goto queue
@@ -96,8 +98,9 @@ if not "%APKNAME:*/=%"=="%APKNAME%" (set "APKNAME=%APKNAME:*/=%" & goto apkname_
 for %%F in ("%APKNAME%") do set "APKNAME=%%~nxF"
 if /i "%APK:~0,4%"=="http" (
   echo downloading %APK%
-  curl.exe -L --fail -o "%HERE%hakux-test.apk" "%APK%" || (echo download failed & exit /b 1)
-  set "APK=%HERE%hakux-test.apk"
+  rem kept in the test folder under its own name (it says which build it is)
+  curl.exe -L --fail -o "%HERE%%APKNAME%" "%APK%" || (echo download failed & exit /b 1)
+  set "APK=%HERE%%APKNAME%"
 )
 "%ADB%" install -r "%APK%"
 if errorlevel 1 (
@@ -213,13 +216,11 @@ rem queue.txt the first time: the suite's batches in the order docs/diag-suite.m
 > "%Q%" echo # route queue: one route command a line, run in order by "route queue".
 >> "%Q%" echo # Lines starting with # are skipped. Finished lines go to queue.done.
 >> "%Q%" echo # The charging test (V7) needs you to unplug the phone, so it isn't here.
->> "%Q%" echo suite base nohints:adpf=0
->> "%Q%" echo suite fps60:mod=60fps fps40:mod=40fps
->> "%Q%" echo suite base cold:cold=1
->> "%Q%" echo suite base async0:asyncpipe=0
->> "%Q%" echo suite base sysdrv:driver=system
->> "%Q%" echo suite base x3:scale=3
->> "%Q%" echo auto
+rem v4 (build-optimized-test-v4): the decoder's spin, the vCPU's cores, a noise reference
+>> "%Q%" echo suite spin200:pbspin=200 spin0:pbspin=0
+>> "%Q%" echo suite x4:vcpucore=1 all:vcpucore=0
+>> "%Q%" echo suite base1 base2
+>> "%Q%" echo suite spin200:pbspin=200 spin50:pbspin=50
 exit /b 0
 
 rem ---- backup / restore of the app's own files (run-as: a debug build) ----

@@ -68,7 +68,8 @@ it, and pulls and uploads the results. Settings live in `route.cfg` next to
 
 | What | How | Cause it targets |
 |---|---|---|
-| Log tags `hakuX-hle-hitch`, `-native-perf`, `-native-vbl`, `-native-watch`, `-native-mods`, `-hle-pipe`, `-native` (the `translations of ... dropped` lines), `-native-usb`, `-app`, `-hle`, `-hle-prof`, `-apu` | logcat filter | stutter causes, vblank latency, interval changes, shader compiles, JIT invalidation |
+| Log tags `hakuX-hle-hitch`, `-native-perf`, `-native-vbl`, `-native-watch`, `-native-mods`, `-hle-pipe`, `-native` (the `translations of ... dropped` lines), `-native-usb`, `-app`, `-hle`, `-hle-prof`, `-apu`, `-native-irq`, `-hle-pb` | logcat filter | stutter causes, vblank latency, interval changes, shader compiles, JIT invalidation, late interrupts, the decoder's statistics and spin |
+| `NC_IRQ_SCHED=1` (`IRQ_SCHED` in `route.cfg`) | `debug.hakux.env2`, beside the replay's `NC_PAD_STATE=1`, set before every run (read at game start; `debug.hakux.env` holds the replay's path and a property holds 91 characters); checked in the run's `debug.hakux.env:` log lines | a late interrupt's guest thread: waiting for a host CPU, or blocked |
 | `debug.hakux.watch 0x862494` | setprop before each run's savestate load (each new game process reads it) | Fable changing its presentation interval |
 | Sensors **every 1 s**: CPU cur freq and max (cap) per policy (0, 2, 5, 7), GPU `clock_mhz`, `max_clock_mhz`, `gpu_busy_percentage`, GPU temp, gpuss 32-39 max, battery temp. Thermal status every 5 s only (dumpsys is heavy) | sysfs reads in a loop | clocks/caps around a stutter; thermal limits |
 | **Per-thread scheduler stats** of the game's process at the start and end of the replay: `/proc/<pid>/task/<tid>/schedstat` (time on CPU, **time waiting for a CPU**, timeslices), `stat` field 39 (last CPU), `comm`; lines `<tid> <run_ns> <wait_ns> <slices> <last_cpu> <name>` | `run-as` (the app's own `/proc` entries), piped to `schedstat_start.txt` / `schedstat_end.txt` | host starvation, measured directly: run-queue wait per thread |
@@ -90,7 +91,14 @@ decoder (`hle-pb`), `hle.render`, main (`SDLActivity`) and `apu.frame`
 threads; JIT drops and the most in 10 s; SurfaceFlinger presented frames,
 gaps over 1.5 times the median frame interval, the longest gap, the median
 interval and the source (`latency`, or `timestats` when the latency samples
-held no frames); the mods the run applied.
+held no frames); the mods the run applied; the decoder's spin (`pbspin_us`);
+the late interrupts (`hakuX-native-irq` "line N delivered X ms after it
+rose" lines: count, by first reason: an ISR running / interrupts off (IF 0)
+/ IRQL at or above it / none: no kernel entry meanwhile; delay avg and max;
+the guest CPU's thread's "ran Y ms of it" avg and max; host CPU wait avg);
+the `hakuX-hle-pb` statistics lines (count, kicks and words summed, flips
+over the replay). `report.txt` shows them in "Late interrupts" and
+"Decoder" (with `hle-pb`'s run and wait time beside the spin).
 
 ## 2. Probe runs (one per scene per batch, not counted in A/B)
 
@@ -149,6 +157,14 @@ instead (any build), and put back at the end.
 | V6 | `route suite base x3:scale=3` | GPU headroom: cost of a sharper image (baseline 2x) |
 | V7 | unplugged vs charging: two batches, `route suite base` once plugged in and once unplugged (start it, then unplug; plug back in for `route watch` to pull and upload) | heat from charging, clock caps |
 | V8 | `route suite x4:vcpucore=1 all:vcpucore=0` (`route auto`), with `RUNS=10` | X4 placement (batch 1: -18% vCPU work, stutters within noise) |
+| V9 (v4) | `route suite spin200:pbspin=200 spin0:pbspin=0`, later `spin200:pbspin=200 spin50:pbspin=50` | the decoder's spin before sleeping (`debug.hakux.pbspin`, us; 200 is the default) keeps a fast core busy beside the vCPU (`hle-pb` run time). Read within a second; reset to `""` at the end. Each run checks the decoder's `decoder spin before sleeping: N us` line (logged only when it isn't 200: no line is 200) |
+| V10 (v4) | `route suite base1 base2` | no variant: the noise between two identical halves, with the new logging |
+
+**v4 queue** (`queue.txt` made by `route queue`; delete an old `queue.txt`
+and `queue.done` to get it): V9 (200 vs 0), V8 (`vcpucore` 1 vs 0, 6 runs),
+V10, then V9 with 50. Install the v4 APK first: `route install` downloads
+the newest `build-optimized-test-v4` release's APK (build 15) into the test
+folder under its own name and records that name for `batch.txt`.
 
 Order: V1, V2, V4 first (they bear on the dominant "flipped late though
 ready" stutters); V3, V5 for pop-in and GPU; V6-V8 as time allows.
