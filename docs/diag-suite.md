@@ -13,6 +13,7 @@ it, and pulls and uploads the results. Settings live in `route.cfg` next to
 
 | Command | What it does |
 |---|---|
+| `route queue` | runs the batches in `queue.txt` (made the first time: V1-V6 and V8, in the order of section 3) one after another. Whenever the phone stops answering adb (Auto Blocker on, cable out, locked, "Allow USB debugging" pending) it waits and says what to check; once the phone answers again it follows a batch still running, uploads one that finished meanwhile, or cleans up and re-runs one that was killed (3 tries). Finished batches are listed in `queue.done`. |
 | `route suite A [B]` | the batch below |
 | `route auto` | `route suite x4:vcpucore=1 all:vcpucore=0` |
 | `route run <route> [runs] [variants]` | one scene (slot `SLOT`), then the probes in `PROBES` |
@@ -40,6 +41,10 @@ it, and pulls and uploads the results. Settings live in `route.cfg` next to
 - **Same start temperature.** Before each run, wait until the hottest gpuss
   zone (thermal zones 32-39) is under 45 C, for at most 90 s, and record the
   start temperature (`run.txt`: `start_gpuss_C`).
+- **Auto Blocker.** Whether it's on can't be read from adb, but while it's
+  on the phone refuses adb completely, so "adb answers" means "Auto Blocker
+  is off". `route queue` uses that: it waits whenever adb stops answering and
+  carries on by itself once it's back.
 - **Survive adb drops.** The runner runs on the phone, detached
   (`setsid nohup`), writing everything under `/sdcard/hakux_diag/routes/`;
   after a reconnect, `route watch` follows it again and pulls and uploads at

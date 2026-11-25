@@ -27,7 +27,7 @@
 #       A savestate of the running game to that slot, or loaded from it.
 #   clean
 #       The properties the runner sets, cleared (after a batch was cut off).
-#   start <command ...> / watch / stop / report <batch dir>
+#   start <command ...> / watch / stop / status / report <batch dir>
 #
 # A variant is label:name=value,name=value. Names:
 #   adpf, vcpucore, ... (or debug.anything): a property, set before the run
@@ -579,6 +579,7 @@ cmd_start() {
     die "a batch is already running (pid $(cat "$OUT/route.pid")): route watch, or route stop"
   fi
   : > "$OUT/console.txt"; rm -f "$OUT/route.pid"
+  echo "$*" > "$OUT/console.cmd"        # what's running (route.sh status, route queue)
   HAKUX_PIDFILE=$OUT/route.pid setsid nohup sh "$0" "$@" > "$OUT/console.txt" 2>&1 < /dev/null &
   w=0; while [ ! -s "$OUT/route.pid" ] && [ $w -lt 10 ]; do sleep 1; w=$((w + 1)); done
 }
@@ -632,6 +633,23 @@ cmd_clean() {
   say "(vcpucore, adpf and watch left as they are; restarting the phone clears them all)"
 }
 
+# The last detached command: "running|<command>|", "done|<command>|" (its
+# batch finished), "stopped|<command>|" (it ended without finishing:
+# stopped, killed, failed), or "none||".
+cmd_status() {
+  c=$(cat "$OUT/console.cmd" 2>/dev/null)
+  if [ -f "$OUT/route.pid" ] && kill -0 "$(cat "$OUT/route.pid")" 2>/dev/null; then
+    st=running
+  elif grep -q "^\[route\] batch done" "$OUT/console.txt" 2>/dev/null; then
+    st=done
+  elif [ -n "$c" ]; then
+    st=stopped
+  else
+    st=none
+  fi
+  echo "$st|$c|"      # (route.bat reads it: a delimiter after the command)
+}
+
 cmd_stop() {
   [ -f "$OUT/route.pid" ] && kill -TERM "$(cat "$OUT/route.pid")" 2>/dev/null && say "stopping" || say "nothing running"
 }
@@ -642,6 +660,7 @@ case "$1" in
   start) shift; cmd_start "$@";;
   watch) cmd_watch;;
   stop) cmd_stop;;
+  status) cmd_status;;
   save) shift; cmd_save "$@";;
   load) shift; cmd_load "$@";;
   clean) cmd_clean;;

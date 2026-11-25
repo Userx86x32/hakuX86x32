@@ -24,6 +24,10 @@ rem   route backup           savestates, settings, GPU driver and save games to 
 rem   route restore          puts hakux-backup.tar back
 rem   route reinstall        backup, uninstall, install the test APK, restore (when an
 rem                          install fails: INSTALL_FAILED_UPDATE_INCOMPATIBLE)
+rem   route queue            runs the batches in queue.txt one after another, by itself:
+rem                          when the phone stops answering (Auto Blocker on, cable,
+rem                          locked) it waits, says so, and carries on once it's back;
+rem                          a batch Auto Blocker killed is cleaned up and run again
 rem   route watch            follows a batch again (after the cable dropped)
 rem   route stop             stops a batch
 rem   route pull             copies /sdcard/hakux_diag/routes to .\routes
@@ -43,22 +47,21 @@ if /i "%1"=="upload" set "UPLOAD_AFTER=1"
 set "ADB=adb"
 set "APK_URL=https://github.com/Userx86x32/hakuX86x32/releases/download/build-claude-vibrant-cerf-lmdbik-14/hakuX-debug-claude-vibrant-cerf-lmdbik-14-e6ba66e-sd865up.apk"
 where adb >nul 2>nul || if exist "%HERE%platform-tools\adb.exe" (set "ADB=%HERE%platform-tools\adb.exe") else if exist "%HERE%adb.exe" (set "ADB=%HERE%adb.exe") else if exist "C:\hakuX-tests\platform-tools\adb.exe" (set "ADB=C:\hakuX-tests\platform-tools\adb.exe") else if exist "C:\hakuX-tests\adb.exe" (set "ADB=C:\hakuX-tests\adb.exe") else (echo adb not found: put this file next to adb.exe or platform-tools & exit /b 1)
+set "PKG=com.rfandango.haku_x.debug"
+if /i "%1"=="queue" goto queue
 "%ADB%" get-state >nul 2>nul || (
   if /i "%1"=="upload" goto upload
   echo no phone: check the cable and USB debugging, and allow this PC on the phone
   exit /b 1
 )
 if /i "%1"=="upload" goto pull
-set "PKG=com.rfandango.haku_x.debug"
 set "BK=%HERE%hakux-backup.tar"
 if /i "%1"=="pull" goto pull
 if /i "%1"=="install" goto install
 if /i "%1"=="backup" goto backup
 if /i "%1"=="restore" goto restore
 if /i "%1"=="reinstall" goto reinstall
-"%ADB%" shell mkdir -p /data/local/tmp/hakux
-"%ADB%" push "%HERE%route.sh" "%HERE%route_report.sh" "%HERE%route_trace.pbtx" /data/local/tmp/hakux/ >nul || exit /b 1
-if exist "%HERE%route.cfg" ("%ADB%" push "%HERE%route.cfg" /data/local/tmp/hakux/ >nul) else ("%ADB%" shell rm -f /data/local/tmp/hakux/route.cfg)
+call :push_scripts || exit /b 1
 if /i "%1"=="watch" goto watch
 if /i "%1"=="stop" (
   "%ADB%" shell sh /data/local/tmp/hakux/route.sh stop
@@ -100,6 +103,102 @@ if errorlevel 1 (
   exit /b 1
 )
 if not "%REINST%"=="1" echo installed. Start Fable once by hand so hakuX remembers it, then: route auto
+exit /b 0
+
+rem ---- the scripts to the phone ----
+:push_scripts
+"%ADB%" shell mkdir -p /data/local/tmp/hakux
+"%ADB%" push "%HERE%route.sh" "%HERE%route_report.sh" "%HERE%route_trace.pbtx" /data/local/tmp/hakux/ >nul || exit /b 1
+if exist "%HERE%route.cfg" ("%ADB%" push "%HERE%route.cfg" /data/local/tmp/hakux/ >nul) else ("%ADB%" shell rm -f /data/local/tmp/hakux/route.cfg)
+exit /b 0
+
+rem ---- the queue: queue.txt's commands in order, finished ones in queue.done ----
+:queue
+set "Q=%HERE%queue.txt"
+set "QD=%HERE%queue.done"
+if not exist "%Q%" call :queue_default
+if not exist "%QD%" type nul > "%QD%"
+echo queue: %Q%  (finished: %QD%; delete it to run everything again)
+echo Stop with Ctrl+C here, then: route stop
+:queue_next
+set "NEXT="
+for /f "usebackq eol=# delims=" %%L in ("%Q%") do if not defined NEXT (
+  findstr /x /c:"%%L" "%QD%" >nul || set "NEXT=%%L"
+)
+if not defined NEXT (
+  echo [%TIME%] queue: everything in queue.txt is done
+  goto :eof
+)
+set "TRIES=0"
+:queue_try
+call :wait_phone
+call :push_scripts || goto queue_try
+call :phone_status
+rem the batch is still running (the phone was away a while): follow it again
+if "%ST%"=="running" goto queue_watch
+rem it finished while the phone was away
+if "%ST%"=="done" if "%STC%"=="%NEXT%" goto queue_finished
+if %TRIES% geq 3 (
+  echo [%TIME%] queue: "%NEXT%" didn't finish in 3 tries, skipped
+  >> "%QD%" echo %NEXT%
+  goto queue_next
+)
+set /a TRIES+=1
+"%ADB%" shell sh /data/local/tmp/hakux/route.sh clean >nul
+echo.
+echo [%TIME%] queue: route %NEXT%   (try %TRIES%)
+"%ADB%" shell sh /data/local/tmp/hakux/route.sh start %NEXT%
+:queue_watch
+"%ADB%" shell sh /data/local/tmp/hakux/route.sh watch
+call :wait_phone
+call :phone_status
+if "%ST%"=="running" goto queue_watch
+if "%ST%"=="done" if "%STC%"=="%NEXT%" goto queue_finished
+echo [%TIME%] queue: "%NEXT%" ended without finishing (Auto Blocker or the game closing): again
+goto queue_try
+:queue_finished
+>> "%QD%" echo %NEXT%
+echo [%TIME%] queue: "%NEXT%" done
+set "UPLOAD_AFTER=1"
+call :pull
+goto queue_next
+
+rem ST and STC: the phone's last batch (route.sh status): running/done/stopped/none, its command
+:phone_status
+set "ST=none"
+set "STC="
+rem (status prints state|command|: a stray carriage return falls after the last |)
+for /f "tokens=1,2 delims=|" %%A in ('""%ADB%" shell sh /data/local/tmp/hakux/route.sh status"') do (
+  set "ST=%%A"
+  set "STC=%%B"
+)
+exit /b 0
+
+rem waits until the phone answers adb (Auto Blocker on, unplugged, locked or not allowed: it doesn't)
+:wait_phone
+"%ADB%" get-state 2>nul | findstr /x device >nul && exit /b 0
+echo.
+echo [%TIME%] waiting for the phone. Check: plugged in, unlocked, Auto Blocker off
+echo           (Settings, Security and privacy, Auto Blocker), and "Allow USB debugging" if asked.
+:wait_phone_loop
+ping -n 16 127.0.0.1 >nul
+"%ADB%" get-state 2>nul | findstr /x device >nul || goto wait_phone_loop
+echo [%TIME%] the phone is back
+ping -n 6 127.0.0.1 >nul
+exit /b 0
+
+rem queue.txt the first time: the suite's batches in the order docs/diag-suite.md gives
+:queue_default
+> "%Q%" echo # route queue: one route command a line, run in order by "route queue".
+>> "%Q%" echo # Lines starting with # are skipped. Finished lines go to queue.done.
+>> "%Q%" echo # The charging test (V7) needs you to unplug the phone, so it isn't here.
+>> "%Q%" echo suite base nohints:adpf=0
+>> "%Q%" echo suite fps60:mod=60fps fps40:mod=40fps
+>> "%Q%" echo suite base cold:cold=1
+>> "%Q%" echo suite base async0:asyncpipe=0
+>> "%Q%" echo suite base sysdrv:driver=system
+>> "%Q%" echo suite base x3:scale=3
+>> "%Q%" echo auto
 exit /b 0
 
 rem ---- backup / restore of the app's own files (run-as: a debug build) ----
@@ -176,4 +275,4 @@ git -C "%RES%" diff --cached --quiet && (echo results: nothing new to upload & g
 git -C "%RES%" commit -q -m "route results %DATE% %TIME%"
 git -C "%RES%" push -q -u origin diag-results || (echo results not uploaded: the push failed, run: route upload & goto :eof)
 echo results uploaded: https://github.com/Userx86x32/hakuX86x32/tree/diag-results/routes
-endlocal
+goto :eof

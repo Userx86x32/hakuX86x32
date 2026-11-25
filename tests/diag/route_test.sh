@@ -181,6 +181,9 @@ tail -n 4 "$M/watch.log"
 check 'grep -q "batch done" "$M/watch.log"'
 check '[ "$(ls -d "$M"/out/auto-2*/0* | wc -l)" = 3 ]'
 check 'grep -q "^\[route\] finished" "$M/watch.log"'
+check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "done|auto|" ]'
+echo "stop: not finished" > "$M/out/console.txt"
+check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "stopped|auto|" ]'
 exit $fail' EXIT
 mkdir -p "$M/bin" "$M/props" "$M/data" "$M/out"
 : > "$M/logcat"
@@ -318,4 +321,7 @@ tail -n 4 "$M/watch.log"
 check 'grep -q "batch done" "$M/watch.log"'
 check '[ "$(ls -d "$M"/out/auto-2*/0* | wc -l)" = 2 ]'
 check 'grep -q "^\[route\] finished" "$M/watch.log"'
+check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "done|auto|" ]'
+echo "stop: not finished" > "$M/out/console.txt"
+check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "stopped|auto|" ]'
 exit $fail
