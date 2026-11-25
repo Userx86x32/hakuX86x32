@@ -55,11 +55,20 @@ exec tail -n 0 -F "$M/logcat" 2>/dev/null
 X
 cat > "$M/bin/run-as" <<'X'
 #!/bin/sh
+cd "$M/data/$1" 2>/dev/null
 shift
 for a; do set -- "$@" "$(echo "$a" | sed "s|/data/data|$M/data|g")"; shift; done
 exec "$@"
 X
-for c in settings svc dumpsys perfetto; do printf '#!/bin/sh\nexit 0\n' > "$M/bin/$c"; done
+cat > "$M/bin/am" <<'X'
+#!/bin/sh
+echo "am $*" >> "$M/am"
+(sleep 1; echo 2000 > "$M/pid") &
+X
+mkdir -p "$M/data/com.rfandango.haku_x.debug/shared_prefs"
+printf '<map>\n  <string name="dvdUri">content://x/tree/ROMs%%2FFable%%20(USA).iso?a=1&amp;b=2</string>\n</map>\n' \
+  > "$M/data/com.rfandango.haku_x.debug/shared_prefs/x1box_prefs.xml"
+for c in settings svc dumpsys perfetto input wm; do printf '#!/bin/sh\nexit 0\n' > "$M/bin/$c"; done
 chmod +x "$M"/bin/*
 export PATH="$M/bin:$PATH" HAKUX_OUT="$M/out" HAKUX_TMP="$M" HAKUX_TRACE=0 HAKUX_COOL=0
 echo 'NC_TRACE_X=1' > "$M/props/debug.hakux.env"
@@ -67,8 +76,7 @@ echo 'NC_TRACE_X=1' > "$M/props/debug.hakux.env"
 fail=0
 check() { if eval "$1"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
 
-echo "== record (the game started 2 s in)"
-(sleep 2; echo 1000 > "$M/pid") & echo $! >> "$M/bg"
+echo "== record (the runner starts the game: am start)"
 sh "$ROOT/tools/diag/route.sh" record bower > "$M/record.log" 2>&1 || { cat "$M/record.log"; exit 1; }
 cat "$M/record.log"
 check '[ "$(grep -vc "^#" "$M/out/bower.txt")" = 3 ]'
@@ -76,12 +84,17 @@ check 'grep -q "setprop debug.hakux.env=NC_PAD_RECORD=/data/data/com.rfandango.h
 check '[ "$(cat "$M/props/debug.hakux.env")" = NC_TRACE_X=1 ]'      # put back
 check '[ -z "$(cat "$M/props/debug.hakux.state")" ]'
 
-echo "== run: 3 runs over 2 variants"
-: > "$M/setprops"
+echo "== tour, then run: 3 runs over 2 variants, the game started by the runner"
+: > "$M/setprops"; rm -f "$M/pid" "$M/booted"
+sh "$ROOT/tools/diag/route.sh" tour bower 2
+check '[ "$(grep -c "f:ly=32767:300f" "$M/out/bower.txt")" -ge 6 ]'
+check '! grep -q "a\|b\|start" "$(sed 1d "$M/out/bower.txt" > "$M/t"; echo "$M/t")"'
+
 sh "$ROOT/tools/diag/route.sh" run bower 3 x4:vcpucore=1 all:vcpucore=0,debug.hakux.adpf=0 > "$M/run.log" 2>&1 ||
   { cat "$M/run.log"; exit 1; }
 cat "$M/run.log"
 B=$(ls -d "$M"/out/bower-2*)
+check 'grep -q "am start -a android.intent.action.VIEW -d content://x/tree/ROMs%2FFable%20(USA).iso?a=1&b=2 -n com.rfandango.haku_x.debug/com.rfandango.haku_x.LauncherActivity" "$M/am"'
 check '[ "$(ls "$B" | grep -c "^0[123]-")" = 3 ]'
 check '[ -d "$B/01-x4" ] && [ -d "$B/02-all" ] && [ -d "$B/03-x4" ]'
 check 'grep -q "debug.hakux.adpf=0" "$B/02-all/run.txt"'

@@ -4,14 +4,20 @@
 # hakuX's stutter log, clocks/caps/temperatures and a perfetto trace of
 # each run. Runs on the phone (adb shell); route.bat drives it from the PC.
 #
+#   sh route.sh tour <name> [minutes]
+#       Makes a route with no one playing: from the savestate, run forward,
+#       turn, sweep the camera, again and again (sticks only: no buttons, so
+#       no talking, attacking or menus).
 #   sh route.sh record <name>
-#       Start Fable when asked; the script loads savestate slot 1 and
-#       records your controller until you open hakuX's menu (or press Home).
+#       Or a route you play: the script loads savestate slot 1 and records
+#       your controller until you open hakuX's menu (or press Home).
 #   sh route.sh run <name> [runs] [variant ...]
-#       Start Fable once when asked; then each run loads slot 1 and replays
-#       the route. A variant is label:prop=value,prop=value (debug.hakux.
-#       may be left out of prop), e.g. x4:vcpucore=1 all:vcpucore=0; runs
-#       cycle through the variants (default: one, "default", as set now).
+#       Each run loads slot 1 and replays the route. A variant is
+#       label:prop=value,prop=value (debug.hakux. may be left out of prop),
+#       e.g. x4:vcpucore=1 all:vcpucore=0; runs cycle through the variants
+#       (default: one, "default", as set now).
+# The game starts by itself (the last game hakuX ran, so run Fable once by
+# hand after installing), and again if it closes mid-batch.
 #   sh route.sh report <batch dir>
 #
 # Output: /sdcard/hakux_diag/routes/<name>.txt (the route) and
@@ -61,11 +67,31 @@ check_name() {
 
 native_pid() { pidof $PKG:native 2>/dev/null; }
 
-# ---- the game: started by the user, then savestate loads by property ----
+# ---- the game: started from hakuX's last game, then savestate loads by property ----
+
+# The disc hakuX ran last (its prefs' dvdUri; run-as: a debug build).
+last_game() {
+  run-as $PKG cat shared_prefs/x1box_prefs.xml 2>/dev/null |
+    sed -n 's|.*<string name="dvdUri">\(.*\)</string>.*|\1|p' |
+    sed "s/&quot;/\"/g; s/&apos;/'/g; s/&lt;/</g; s/&gt;/>/g; s/&amp;/\\&/g"
+}
+
+start_game() {
+  uri=$(last_game)
+  [ -n "$uri" ] || return 1
+  input keyevent KEYCODE_WAKEUP 2>/dev/null
+  wm dismiss-keyguard 2>/dev/null       # no-op behind a PIN: unlock the phone first
+  say "starting $uri"
+  am start -a android.intent.action.VIEW -d "$uri" -n $PKG/com.rfandango.haku_x.LauncherActivity > /dev/null 2>&1
+  w=0
+  while [ -z "$(native_pid)" ] && [ $w -lt 30 ]; do sleep 1; w=$((w + 1)); done
+  [ -n "$(native_pid)" ]
+}
+
 wait_game() {
-  if [ -z "$(native_pid)" ]; then
-    say ">>> Start Fable in hakuX now (from the game list; don't load a state)."
-    say "    Waiting for the game..."
+  if [ -z "$(native_pid)" ] && ! start_game; then
+    say ">>> Couldn't start the game by itself (no last game in hakuX, or the phone"
+    say "    is locked). Start Fable in hakuX now (don't load a state). Waiting..."
     while [ -z "$(native_pid)" ]; do sleep 2; done
   fi
   say "game running (pid $(native_pid))"
@@ -156,6 +182,29 @@ set_variant() {   # label:prop=value,prop=value
 }
 
 # ---- commands ----
+# A route with no one playing (sticks only), in frames since the load:
+# settle, then rounds of run forward, turn while running, stop and sweep the
+# camera, turning left and right in turn so it zigzags rather than circles.
+cmd_tour() {
+  name=$1; check_name "$name"; mins=${2:-3}
+  case "$mins" in ''|*[!0-9]*) die "minutes is a number (got '$mins')";; esac
+  mkdir -p "$OUT" || die "can't write $OUT"
+  frames=$((mins * 60 * 30))            # at 30 frames a second
+  {
+    echo "# hakuX route: tour, $mins min (route.sh tour)"
+    f=90 k=0
+    while [ $f -lt $frames ]; do
+      if [ $((k % 2)) = 0 ]; then side=32767; else side=-32767; fi
+      echo "${f}f:ly=32767:300f"; f=$((f + 300))
+      echo "${f}f:ly=32767+lx=$side:40f"; f=$((f + 40))
+      echo "${f}f:ly=32767:200f"; f=$((f + 200))
+      echo "${f}f:rx=$side:120f"; f=$((f + 150))
+      k=$((k + 1))
+    done
+  } > "$OUT/$name.txt"
+  say "made $OUT/$name.txt ($(grep -vc '^#' "$OUT/$name.txt") steps, about $mins min)"
+}
+
 cmd_record() {
   name=$1; check_name "$name"
   mkdir -p "$OUT" || die "can't write $OUT"
@@ -217,6 +266,11 @@ cmd_run() {
       { echo "variant=$label"; set_variant "$v"; echo "start=$(date)"
         echo "battery_dC=$(cat /sys/class/power_supply/battery/temp 2>/dev/null)"; } > "$RUN_DIR/run.txt"
       say "run $run/$runs: $label"
+      if [ -z "$(native_pid)" ]; then
+        say "the game closed: starting it again"
+        start_game || die "the game closed and couldn't start again (in $BATCH)"
+        sleep 20                         # booting before the load request
+      fi
       start_capture "$RUN_DIR"
       load_slot
       if wait_log "$RUN_DIR/logcat.txt" "pad script: started" 120; then
@@ -227,7 +281,7 @@ cmd_run() {
         say "run $run: the replay didn't start (see $RUN_DIR/logcat.txt)"
       fi
       stop_capture
-      [ -n "$(native_pid)" ] || die "the game closed; $run of $runs runs done (in $BATCH)"
+      [ -n "$(native_pid)" ] || say "run $run: the game closed (see $RUN_DIR/logcat.txt)"
       run=$((run + 1))
       if [ $run -le "$runs" ] && [ "$COOL" -gt 0 ]; then
         say "cooling down ${COOL} s"
@@ -242,8 +296,9 @@ cmd_run() {
 }
 
 case "$1" in
+  tour) shift; cmd_tour "$@";;
   record) shift; cmd_record "$@";;
   run) shift; cmd_run "$@";;
   report) shift; sh "$HERE/route_report.sh" "$@";;
-  *) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
+  *) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
 esac
