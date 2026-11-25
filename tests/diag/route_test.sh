@@ -98,7 +98,10 @@ PROBE_SECS=2
 COOL_MAX=0
 X
 export PATH="$M/bin:$PATH" HAKUX_OUT="$M/out" HAKUX_TMP="$M" HAKUX_CFG="$M/route.cfg" HAKUX_TRACE_FILE="$M/trace.pftrace"
-echo 'NC_TRACE_X=1' > "$M/props/debug.hakux.env"
+# a batch cut off earlier left its replay in debug.hakux.env: kept out of
+# what the runner puts back (else every savestate load replays the route)
+printf 'NC_TRACE_X=1;NC_PAD_SCRIPT=@/old/route.txt' > "$M/props/debug.hakux.env"
+printf 'NC_PAD_STATE=1' > "$M/props/debug.hakux.env2"
 
 fail=0
 check() { if eval "$1"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
@@ -108,7 +111,8 @@ sh "$ROOT/tools/diag/route.sh" record bower > "$M/record.log" 2>&1 || { cat "$M/
 cat "$M/record.log"
 check '[ "$(grep -vc "^#" "$M/out/bower.txt")" = 3 ]'
 check 'grep -q "setprop debug.hakux.env=NC_PAD_RECORD=/data/data/com.rfandango.haku_x.debug/files/r/bower.txt" "$M/setprops"'
-check '[ "$(cat "$M/props/debug.hakux.env")" = NC_TRACE_X=1 ]'      # put back
+check '[ "$(cat "$M/props/debug.hakux.env")" = NC_TRACE_X=1 ]'      # put back, without the old replay
+check '[ -z "$(cat "$M/props/debug.hakux.env2")" ]'
 check '[ -z "$(cat "$M/props/debug.hakux.state")" ]'
 
 echo "== tour, then run: 3 runs over 2 variants, the game started by the runner"
@@ -165,9 +169,9 @@ sh "$ROOT/tools/diag/route.sh" save 2 > "$M/save.log" 2>&1; cat "$M/save.log"
 check '[ -f "$A/files/native/states/4D5300D1.1/slot2.hxs" ] && grep -q "saved to slot 2" "$M/save.log"'
 check '[ -z "$(cat "$M/props/debug.hakux.state")" ]'
 rm -f "$A/files/native/states/4D5300D1.1/slot2.hxs"
-setprop debug.hakux.opts scale=3; setprop debug.hakux.env NC_PAD_SCRIPT=@x
+setprop debug.hakux.opts scale=3; setprop debug.hakux.env "NC_TRACE_Y=2;NC_PAD_SCRIPT=@x"; setprop debug.hakux.env2 NC_PAD_STATE=1
 sh "$ROOT/tools/diag/route.sh" clean
-check '[ -z "$(cat "$M/props/debug.hakux.opts")" ] && [ -z "$(cat "$M/props/debug.hakux.env")" ]'
+check '[ -z "$(cat "$M/props/debug.hakux.opts")" ] && [ "$(cat "$M/props/debug.hakux.env")" = NC_TRACE_Y=2 ] && [ -z "$(cat "$M/props/debug.hakux.env2")" ]'
 
 echo "== detached: start auto, then watch"
 rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
@@ -265,7 +269,10 @@ PROBE_SECS=2
 COOL_MAX=0
 X
 export PATH="$M/bin:$PATH" HAKUX_OUT="$M/out" HAKUX_TMP="$M" HAKUX_CFG="$M/route.cfg" HAKUX_TRACE_FILE="$M/trace.pftrace"
-echo 'NC_TRACE_X=1' > "$M/props/debug.hakux.env"
+# a batch cut off earlier left its replay in debug.hakux.env: kept out of
+# what the runner puts back (else every savestate load replays the route)
+printf 'NC_TRACE_X=1;NC_PAD_SCRIPT=@/old/route.txt' > "$M/props/debug.hakux.env"
+printf 'NC_PAD_STATE=1' > "$M/props/debug.hakux.env2"
 
 fail=0
 check() { if eval "$1"; then echo "ok   $1"; else echo "FAIL $1"; fail=1; fi; }
@@ -275,7 +282,8 @@ sh "$ROOT/tools/diag/route.sh" record bower > "$M/record.log" 2>&1 || { cat "$M/
 cat "$M/record.log"
 check '[ "$(grep -vc "^#" "$M/out/bower.txt")" = 3 ]'
 check 'grep -q "setprop debug.hakux.env=NC_PAD_RECORD=/data/data/com.rfandango.haku_x.debug/files/r/bower.txt" "$M/setprops"'
-check '[ "$(cat "$M/props/debug.hakux.env")" = NC_TRACE_X=1 ]'      # put back
+check '[ "$(cat "$M/props/debug.hakux.env")" = NC_TRACE_X=1 ]'      # put back, without the old replay
+check '[ -z "$(cat "$M/props/debug.hakux.env2")" ]'
 check '[ -z "$(cat "$M/props/debug.hakux.state")" ]'
 
 echo "== tour, then run: 3 runs over 2 variants, the game started by the runner"

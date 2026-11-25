@@ -75,13 +75,22 @@ die() { echo "[route] error: $*" >&2; restore; exit 1; }
 
 # ---- the switches: saved first, put back at the end ----
 # Properties the runner sets, and those the batch's variants name.
-SAVED_PROPS="debug.hakux.env debug.hakux.env2 debug.hakux.vcpucore debug.hakux.adpf debug.hakux.opts
-  debug.hakux.perf debug.hakux.perfsec"
+# debug.hakux.env and env2 are put back without any NC_PAD_ entries (the
+# replay's and the recording's: a batch cut off before it put them back left
+# them set, and the next batch must not keep them as the "normal" value, or
+# every savestate load replays the route); the runner's own properties
+# (opts, perf, perfsec) are cleared at the end, not put back.
+SAVED_PROPS="debug.hakux.env debug.hakux.env2 debug.hakux.vcpucore debug.hakux.adpf"
+RUNNER_PROPS="debug.hakux.opts debug.hakux.perf debug.hakux.perfsec"
+without_pad() { echo "$1" | tr ';' '\n' | grep -v '^NC_PAD_' | tr '\n' ';' | sed 's/;*$//'; }
 save_props() {
   : > $TMPD/hakux_route_props
   for p in $SAVED_PROPS $VARIANT_PROPS; do
-    grep -q "^$p=" $TMPD/hakux_route_props || echo "$p=$(getprop $p)" >> $TMPD/hakux_route_props
+    v=$(getprop $p)
+    case "$p" in debug.hakux.env|debug.hakux.env2) v=$(without_pad "$v");; esac
+    grep -q "^$p=" $TMPD/hakux_route_props || echo "$p=$v" >> $TMPD/hakux_route_props
   done
+  for p in $RUNNER_PROPS; do echo "$p=" >> $TMPD/hakux_route_props; done
   STAYON=$(settings get global stay_on_while_plugged_in 2>/dev/null)
   svc power stayon usb 2>/dev/null     # the screen stays on while plugged in (put back after)
 }
@@ -616,10 +625,11 @@ cmd_load() {
 }
 
 cmd_clean() {
-  for p in debug.hakux.env debug.hakux.env2 debug.hakux.state debug.hakux.opts debug.hakux.perf; do
-    setprop "$p" ''
-  done
-  say "cleared: debug.hakux.env, env2, state, opts, perf (vcpucore, adpf and watch left as they are)"
+  setprop debug.hakux.env "$(without_pad "$(getprop debug.hakux.env)")"
+  setprop debug.hakux.env2 "$(without_pad "$(getprop debug.hakux.env2)")"
+  for p in debug.hakux.state $RUNNER_PROPS; do setprop "$p" ''; done
+  say "cleared: the replay and recording (NC_PAD_ in debug.hakux.env, env2), state, opts, perf"
+  say "(vcpucore, adpf and watch left as they are; restarting the phone clears them all)"
 }
 
 cmd_stop() {
