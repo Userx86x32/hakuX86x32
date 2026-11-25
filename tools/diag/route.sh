@@ -29,17 +29,20 @@
 # /sdcard/hakux_diag/routes/<name>-<time>/<run>/ (logcat.txt, sensors.csv,
 # trace.pftrace, run.txt), report.txt and summary.csv beside the runs.
 # Settings: HAKUX_SLOT (1), HAKUX_COOL (seconds between runs, 45),
-# HAKUX_TRACE (0: no perfetto trace).
+# HAKUX_TRACE (0: no perfetto trace), HAKUX_WATCH (debug.hakux.watch each
+# run, 0x862494: Fable's presentation interval).
 PKG=com.rfandango.haku_x.debug
 SLOT=${HAKUX_SLOT:-1}
 COOL=${HAKUX_COOL:-45}
 TRACE=${HAKUX_TRACE:-1}
+WATCH=${HAKUX_WATCH:-0x862494}          # debug.hakux.watch each run: Fable's presentation interval (D3D)
 APPDIR=/data/data/$PKG/files/r          # the app's own files (run-as: a debug build)
 OUT=${HAKUX_OUT:-/sdcard/hakux_diag/routes}
 TMPD=${HAKUX_TMP:-/data/local/tmp}      # (overrides for the host test, tests/diag)
 HERE=$(cd "$(dirname "$0")" && pwd)
 TAGS="hakuX-hle-hitch:V hakuX-native:V hakuX-native-mods:V hakuX-app:V hakuX-native-usb:V
-  hakuX-hle-pipe:V hakuX-hle:V hakuX-hle-prof:V hakuX-apu:V hakuX-native-watch:V hakuX-native-perf:V"
+  hakuX-hle-pipe:V hakuX-hle:V hakuX-hle-prof:V hakuX-apu:V hakuX-native-watch:V hakuX-native-perf:V
+  hakuX-native-vbl:V"
 
 [ -n "$HAKUX_PIDFILE" ] && echo $$ > "$HAKUX_PIDFILE"   # started detached (route.sh start)
 say() { echo "[route] $*"; }
@@ -278,7 +281,10 @@ cmd_run() {
       [ $run -le "$runs" ] || break
       label=${v%%:*}
       RUN_DIR=$BATCH/$(printf '%02d' $run)-$label; mkdir -p "$RUN_DIR"
-      { echo "variant=$label"; set_variant "$v"; echo "start=$(date)"
+      # the guest word watch, set again each run (a restart clears properties;
+      # each new game process reads it again); left set afterwards
+      setprop debug.hakux.watch "$WATCH"
+      { echo "variant=$label"; echo "debug.hakux.watch=$WATCH"; set_variant "$v"; echo "start=$(date)"
         echo "battery_dC=$(cat /sys/class/power_supply/battery/temp 2>/dev/null)"; } > "$RUN_DIR/run.txt"
       say "run $run/$runs: $label"
       if [ -z "$(native_pid)" ]; then

@@ -51,6 +51,7 @@ cat "$M/pid" 2>/dev/null
 X
 cat > "$M/bin/logcat" <<'X'
 #!/bin/sh
+echo "$*" > "$M/logcat_args"
 exec tail -n 0 -F "$M/logcat" 2>/dev/null
 X
 cat > "$M/bin/run-as" <<'X'
@@ -99,6 +100,10 @@ check 'grep -q "am start -a android.intent.action.VIEW -d content://x/tree/ROMs%
 check '[ "$(ls "$B" | grep -c "^0[123]-")" = 3 ]'
 check '[ -d "$B/01-x4" ] && [ -d "$B/02-all" ] && [ -d "$B/03-x4" ]'
 check 'grep -q "debug.hakux.adpf=0" "$B/02-all/run.txt"'
+check '[ "$(grep -c "setprop debug.hakux.watch=0x862494" "$M/setprops")" = 3 ]'
+check 'grep -q "^debug.hakux.watch=0x862494" "$B/03-x4/run.txt"'
+check 'grep -q "present_interval_changes" "$B/summary.csv"'
+check 'grep -q "hakuX-native-vbl:V" "$M/logcat_args" && grep -q "hakuX-native-watch:V" "$M/logcat_args"'
 check 'grep -q "setprop debug.hakux.env=NC_PAD_SCRIPT=@/data/data/com.rfandango.haku_x.debug/files/r/bower.txt" "$M/setprops"'
 check '[ "$(grep -c "^0" "$B/summary.csv")" = 3 ]'
 check 'grep -q "^01-x4,x4,3.0,90,30.0,1," "$B/summary.csv"'
