@@ -6,8 +6,8 @@
 # A batch dir holds one dir per run (logcat.txt, sensors.csv, run.txt).
 B=${1:?usage: sh route_report.sh <batch dir>}
 SUM=$B/summary.csv
-echo "run,variant,secs,frames,fps,stutters,per_min,over_ms,worst_ms,hangs,work_ms,max_gpuss_C,max_batt_C,min_cap_big_khz,min_cap_prime_khz,cpu7_avg_khz,gpu_avg_mhz,vbl_answer_avg_ms,vbl_answer_max_ms,vbl_over_2ms,vbl_over_8ms,vbl_unanswered,flip_delay_avg_ms,flip_delay_max_ms,present_interval_start,present_interval_changes,present_interval_values,kind,start_gpuss_C,wait_vcpu_ms,wait_render_ms,wait_decode_ms,wait_present_ms,run_vcpu_ms,jit_drops,jit_drops_max_10s,sf_frames,sf_gaps_20ms,sf_worst_gap_ms" > "$SUM"
-: > "$B/reasons.txt"; : > "$B/watch.txt"
+echo "run,variant,secs,frames,fps,stutters,per_min,over_ms,worst_ms,hangs,work_ms,max_gpuss_C,max_batt_C,min_cap_big_khz,min_cap_prime_khz,cpu7_avg_khz,gpu_avg_mhz,vbl_answer_avg_ms,vbl_answer_max_ms,vbl_over_2ms,vbl_over_8ms,vbl_unanswered,flip_delay_avg_ms,flip_delay_max_ms,present_interval_start,present_interval_changes,present_interval_values,kind,start_gpuss_C,vcpu_run_ms,vcpu_wait_ms,decode_run_ms,decode_wait_ms,render_run_ms,render_wait_ms,main_run_ms,main_wait_ms,apu_run_ms,apu_wait_ms,jit_drops,jit_drops_max_10s,sf_frames,sf_gaps,sf_worst_gap_ms,sf_median_ms,sf_source,mods" > "$SUM"
+: > "$B/reasons.txt"; : > "$B/watch.txt"; : > "$B/failed.txt"
 
 for R in "$B"/*/; do
   R=${R%/}
@@ -15,6 +15,14 @@ for R in "$B"/*/; do
   run=${R##*/}
   variant=$(sed -n 's/^variant=//p' "$R/run.txt" 2>/dev/null)
   kind=$(sed -n 's/^kind=//p' "$R/run.txt" 2>/dev/null); kind=${kind:-measure}
+  # a run that failed its check (the wrong mods, say): kept out of everything
+  failed=$(sed -n 's/^failed=//p' "$R/run.txt" 2>/dev/null)
+  if [ -n "$failed" ]; then
+    printf '%s\t%s\n' "${R##*/}" "$failed" >> "$B/failed.txt"
+    continue
+  fi
+  mods=$(sed -n 's/^mods_applied=//p' "$R/run.txt" 2>/dev/null | tr ' ' '+')
+  grep -q '^mods_applied=' "$R/run.txt" 2>/dev/null && mods=${mods:-none}
   scene=$(sed -n 's/^scene=//p' "$R/run.txt" 2>/dev/null)
   variant=${variant:-default}
   [ -n "$scene" ] && variant=$scene/$variant          # compared within a scene
@@ -134,49 +142,101 @@ for R in "$B"/*/; do
         out = f[1]; for (i = 2; i <= n; i++) out = out "," f[i]; print out
       }' "$R/sensors.csv" > "$R/.row2" && mv "$R/.row2" "$R/.row"
   fi
-  # each thread's run-queue wait during the replay: the tids hakuX logs for
-  # its vCPU, render, decode and present threads (the replay's process),
-  # their schedstat (time on a CPU, waiting for one; ns) at its start and end
-  tids=$(awk -v spid="$spid" '
+  # each thread's time on a CPU and waiting for one (run-queue wait) during
+  # the replay, from its schedstat at the replay's start and end (lines:
+  # tid run_ns wait_ns slices last_cpu name), by thread name: SDLThread (the
+  # vCPU: the tid hakuX logs for it, else the busiest SDLThread), hle-pb
+  # (the decoder), hle.render, SDLActivity (the app's main thread), apu.frame;
+  # a name held by several threads: the busiest. A thread started after the
+  # first snapshot counts from 0.
+  vtid=$(awk -v spid="$spid" '
     function pid(line) { return match(line, /\( *[0-9]+\)/) ? substr(line, RSTART + 1, RLENGTH - 2) + 0 : -1 }
-    pid($0) != spid { next }
-    /hakuX-native-perf.*thread [a-zA-Z]+: tid [0-9]+/ {
-      m = $0; sub(/^.*thread /, "", m); split(m, a, /[: ]+/); t[a[1]] = a[3]
-    }
-    /hakuX-native-perf.*hint session: .*\(vCPU/ {
-      m = $0; sub(/^.*\(/, "", m); gsub(/[(),]/, " ", m); n = split(m, a, " ")
-      for (i = 1; i < n; i += 2) if (!(a[i] in t)) t[a[i]] = a[i + 1]
-    }
-    END { printf "%s %s %s %s", t["vCPU"] + 0, t["render"] + 0, t["decode"] + 0, t["present"] + 0 }' "$R/logcat.txt")
+    pid($0) == spid && /hakuX-native-perf.*thread vCPU: tid [0-9]+/ { t = $NF }
+    pid($0) == spid && /hakuX-native-perf.*hint session: .*\(vCPU [0-9]+/ && !t {
+      m = $0; sub(/^.*\(vCPU /, "", m); sub(/[^0-9].*$/, "", m); t = m }
+    END { print t + 0 }' "$R/logcat.txt")
   if [ -s "$R/schedstat_start.txt" ] && [ -s "$R/schedstat_end.txt" ]; then
-    sched=$(awk -v tids="$tids" '
+    sched=$(awk -v vtid="$vtid" '
+      function name(  i, n) { n = $6; for (i = 7; i <= NF; i++) n = n " " $i; return n }
       FNR == NR { r0[$1] = $2; w0[$1] = $3; next }
-      { r1[$1] = $2; w1[$1] = $3 }
+      $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ {
+        n = name(); dr = $2 - r0[$1]; dw = $3 - w0[$1]
+        if (dr < 0 || dw < 0) next           # another thread with a reused tid
+        if ($1 == vtid && n == "SDLThread") { vr = dr; vw = dw; vset = 1 }
+        if (!(n in br) || dr > br[n]) { br[n] = dr; bw[n] = dw }
+      }
+      function col(n) { return (n in br) ? sprintf(",%.0f,%.0f", br[n] / 1e6, bw[n] / 1e6) : ",NA,NA" }
       END {
-        n = split(tids, t, " ")
-        for (i = 1; i <= 4; i++) {
-          k = t[i]; out = out "," ((k && (k in w1)) ? sprintf("%.0f", (w1[k] - w0[k]) / 1e6) : "NA")
-        }
-        k = t[1]; out = out "," ((k && (k in r1)) ? sprintf("%.0f", (r1[k] - r0[k]) / 1e6) : "NA")
-        print out
+        if (vset) { br["SDLThread"] = vr; bw["SDLThread"] = vw }
+        print col("SDLThread") col("hle-pb") col("hle.render") col("SDLActivity") col("apu.frame")
       }' "$R/schedstat_start.txt" "$R/schedstat_end.txt")
   else
-    sched=",NA,NA,NA,NA,NA"
+    sched=",NA,NA,NA,NA,NA,NA,NA,NA,NA,NA"
   fi
-  # what the display presented (SurfaceFlinger's actual present times of
-  # hakuX's layer, from the blocks taken during the replay): frames, gaps
-  # over 20 ms, the longest gap
+  # what the display presented: SurfaceFlinger's actual present times of
+  # hakuX's layer (sflatency.txt: a block of its last 127 frames every 2 s,
+  # under "## HH:MM:SS <layer>"). Present times are the monotonic clock: a
+  # block's newest frame against its wall time gives the offset that puts
+  # them in the replay's window. Frames counted once; gaps only between
+  # neighbours in the same block (two blocks may not meet). Gaps: over 1.5
+  # times the median frame interval (16.7 ms at 60 fps, 25 at 40).
+  sf=
   if [ -s "$R/sflatency.txt" ]; then
     sf=$(awk -v t0="$w0" -v t1="$w1" '
       function secs(t,  a) { split(t, a, ":"); return a[1] * 3600 + a[2] * 60 + a[3] }
-      /^## / { keep = (secs($2) >= t0 && secs($2) <= t1 + 2); next }
-      keep && NF == 3 && $2 > 0 && $2 < 9e18 { print $2 }' "$R/sflatency.txt" | sort -n -u |
-      awk 'NR > 1 { d = ($1 - p) / 1e6; if (d > 20) g++; if (d > m) m = d } { p = $1; n++ }
-        END { if (n) printf ",%d,%d,%.1f", n, g, m; else printf ",NA,NA,NA" }')
-  else
-    sf=",NA,NA,NA"
+      function flush(  i, j, x) {
+        if (nb == 0) return
+        for (i = 2; i <= nb; i++) { x = b[i]; for (j = i - 1; j >= 1 && b[j] > x; j--) b[j + 1] = b[j]; b[j + 1] = x }
+        off[++no] = bw + 0.5 - b[nb] / 1e9
+        for (i = 1; i <= nb; i++) { if (!(b[i] in seen)) { seen[b[i]] = 1; fr[++nf] = b[i] }
+          if (i > 1 && !((b[i - 1] SUBSEP b[i]) in pair)) { pair[b[i - 1], b[i]] = 1; pa[++np] = b[i - 1]; pb[np] = b[i] } }
+        nb = 0
+      }
+      /^## / { flush(); bw = secs($2); next }
+      NF == 3 && $2 > 0 && $2 < 9e18 { b[++nb] = $2 }
+      END {
+        flush()
+        if (!nf) { print ",NA,NA,NA,NA,NA"; exit }
+        # the offset: the median of the blocks (a block of an idle layer is old)
+        for (i = 2; i <= no; i++) { x = off[i]; for (j = i - 1; j >= 1 && off[j] > x; j--) off[j + 1] = off[j]; off[j + 1] = x }
+        o = off[int((no + 1) / 2)]
+        if (t1 < t0) t1 += 86400
+        for (i = 1; i <= nf; i++) { t = fr[i] / 1e9 + o; if (t >= t0 && t <= t1) n++ }
+        for (i = 1; i <= np; i++) { t = pa[i] / 1e9 + o; if (t < t0 || pb[i] / 1e9 + o > t1) continue
+          d[++nd] = (pb[i] - pa[i]) / 1e6 }
+        if (!n || !nd) { print ",NA,NA,NA,NA,NA"; exit }
+        for (i = 2; i <= nd; i++) { x = d[i]; for (j = i - 1; j >= 1 && d[j] > x; j--) d[j + 1] = d[j]; d[j + 1] = x }
+        med = d[int((nd + 1) / 2)]
+        for (i = 1; i <= nd; i++) if (d[i] > 1.5 * med) g++
+        printf ",%d,%d,%.1f,%.1f,latency\n", n, g, d[nd], med
+      }' "$R/sflatency.txt")
   fi
-  echo "$(cat "$R/.row"),$kind,${start_c:-NA}$sched,$jit,$jitmax$sf" >> "$SUM"
+  # else SurfaceFlinger's own statistics of the layer (sftimestats.txt:
+  # from the capture's start, the savestate's load included): its frames
+  # and present-to-present histogram (1 ms buckets, then wider)
+  case "$sf" in ''|,NA*)
+    if [ -s "$R/sftimestats.txt" ]; then
+      sf=$(awk '
+        /^layerName = / { cur = ($0 ~ /SurfaceView\[com\.rfandango\.haku_x/); tot = 0; next }
+        cur && /^totalFrames = / { tot = $3 + 0; next }
+        cur && /^present2present histogram/ { want = 1; next }
+        want { want = 0
+          if (tot <= best) next
+          best = tot; nh = 0
+          for (i = 1; i <= NF; i++) { split($i, kv, "="); ms = kv[1]; sub(/ms$/, "", ms); if (kv[2] + 0 > 0) { h[++nh] = ms + 0; c[nh] = kv[2] + 0 } }
+          nhb = nh; for (i = 1; i <= nh; i++) { hb[i] = h[i]; cb[i] = c[i] }
+        }
+        END {
+          if (!best || !nhb) { print ",NA,NA,NA,NA,NA"; exit }
+          for (i = 1; i <= nhb; i++) all += cb[i]
+          for (i = 1; i <= nhb && acc * 2 < all; i++) { acc += cb[i]; med = hb[i] }
+          for (i = 1; i <= nhb; i++) { if (hb[i] > 1.5 * med) g += cb[i]; if (hb[i] > worst) worst = hb[i] }
+          printf ",%d,%d,%.1f,%.1f,timestats\n", best, g, worst, med
+        }' "$R/sftimestats.txt")
+    fi
+  esac
+  [ -n "$sf" ] || sf=",NA,NA,NA,NA,NA"
+  echo "$(cat "$R/.row"),$kind,${start_c:-NA}$sched,$jit,$jitmax$sf,${mods:-NA}" >> "$SUM"
   rm -f "$R/.row" "$R/.window"
 done
 
@@ -204,23 +264,49 @@ done
         printf "%-22s %4d %9.2f %9.2f %9.1f %9.1f %11.1f %10.2f %10.2f %10.1f\n", v, r, a[v] / r, mx[v], o2[v] / r, o8[v] / r, un[v] / r, fa[v] / r, fm[v], pc[v] / r }
     }' "$SUM"
   echo
-  echo "Threads, JIT and display (averages per run; wait = ms a thread was ready but had no CPU):"
+  echo "Threads (averages per run, ms over the replay; run = on a CPU, wait = ready but no CPU free):"
   awk -F, 'function add(k, x) { if (x != "NA") { s[k, v] += x; c[k, v]++ } }
     function avg(k) { return c[k, v] ? sprintf("%.0f", s[k, v] / c[k, v]) : "NA" }
     NR > 1 && $28 == "measure" { v = $2; if (!(v in seen)) { seen[v] = 1; order[++nv] = v }
-      for (i = 29; i <= 40; i++) add(i, $i) }
+      for (i = 29; i <= 39; i++) add(i, $i) }
     END {
-      printf "%-22s %7s %9s %7s %7s %8s %9s %7s %9s %9s %8s %8s\n", "variant", "start C", "vCPU wait", "render", "decode", "present", "vCPU run", "JIT", "JIT/10s", "SF frames", "SF gaps", "SF worst"
+      printf "%-22s %7s %9s %9s %9s %9s %9s %9s %9s %9s %9s %9s\n", "variant", "start C",
+        "vCPU run", "wait", "decode", "wait", "render", "wait", "main", "wait", "apu", "wait"
+      printf "%-22s %7s %9s %9s %9s %9s %9s %9s %9s %9s %9s %9s\n", "", "",
+        "SDLThread", "", "hle-pb", "", "hle.rendr", "", "SDLActvty", "", "apu.frame", ""
       for (i = 1; i <= nv; i++) { v = order[i]
-        printf "%-22s %7s %9s %7s %7s %8s %9s %7s %9s %9s %8s %8s\n", v, avg(29), avg(30), avg(31), avg(32), avg(33), avg(34), avg(35), avg(36), avg(37), avg(38), avg(39) }
+        printf "%-22s %7s %9s %9s %9s %9s %9s %9s %9s %9s %9s %9s\n", v, avg(29), avg(30), avg(31), avg(32), avg(33), avg(34), avg(35), avg(36), avg(37), avg(38), avg(39) }
     }' "$SUM"
+  echo
+  echo "JIT and display (averages per run; SF = what SurfaceFlinger presented of hakuX's layer, gaps = over 1.5x the median frame interval):"
+  awk -F, 'function add(k, x) { if (x != "NA") { s[k, v] += x; c[k, v]++ } }
+    function avg(k, f) { return c[k, v] ? sprintf(f, s[k, v] / c[k, v]) : "NA" }
+    NR > 1 && $28 == "measure" { v = $2; if (!(v in seen)) { seen[v] = 1; order[++nv] = v }
+      for (i = 40; i <= 43; i++) add(i, $i); if ($44 != "NA" && $44 > wst[v]) wst[v] = $44; add(45, $45)
+      if (!((v, $46) in src)) { src[v, $46] = 1; srcs[v] = srcs[v] (srcs[v] == "" ? "" : "+") $46 }
+      if (!((v, $47) in md)) { md[v, $47] = 1; mods[v] = mods[v] (mods[v] == "" ? "" : " ") $47 } }
+    END {
+      printf "%-22s %7s %9s %9s %8s %9s %9s %10s %-10s %s\n", "variant", "JIT", "JIT/10s", "SF frames", "SF gaps", "SF worst", "SF median", "", "SF source", "mods applied"
+      for (i = 1; i <= nv; i++) { v = order[i]
+        printf "%-22s %7s %9s %9s %8s %9s %9s %10s %-10s %s\n", v, avg(40, "%.0f"), avg(41, "%.0f"), avg(42, "%.0f"), avg(43, "%.0f"),
+          (v in wst) ? sprintf("%.1f", wst[v]) : "NA", avg(45, "%.1f"), "", srcs[v], mods[v] }
+    }' "$SUM"
+  echo
+  echo "Failed runs (their check failed: kept out of everything above):"
+  if [ -s "$B/failed.txt" ]; then
+    awk -F'\t' '{ printf "  %-28s %s\n", $1, $2 }' "$B/failed.txt"
+  else
+    echo "  none"
+  fi
   echo
   echo "Probe runs (not in the comparisons above; their collectors cost CPU):"
   awk -F, 'NR > 1 && $28 != "measure" { printf "  %-32s %-12s %6.1f fps %4d stutters (%5.1f/min)\n", $1, $28, $5, $6, $7; n++ }
     END { if (!n) print "  none" }' "$SUM"
   for R in "$B"/*/; do
+    st=$(grep -E '^probe_' "$R/run.txt" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')
+    [ -n "$st" ] && echo "    ${R#$B/}: $st"
     for f in trace.pftrace perf.data simpleperf_symbols.txt simpleperf_threads.txt perfetto.txt simpleperf.txt; do
-      [ -f "$R$f" ] && echo "    ${R#$B/}$f ($(wc -c < "$R$f" | tr -d ' ') bytes)"
+      [ -s "$R$f" ] && echo "    ${R#$B/}$f ($(wc -c < "$R$f" | tr -d ' ') bytes)"
     done
   done
   echo

@@ -71,12 +71,13 @@ it, and pulls and uploads the results. Settings live in `route.cfg` next to
 | Log tags `hakuX-hle-hitch`, `-native-perf`, `-native-vbl`, `-native-watch`, `-native-mods`, `-hle-pipe`, `-native` (the `translations of ... dropped` lines), `-native-usb`, `-app`, `-hle`, `-hle-prof`, `-apu` | logcat filter | stutter causes, vblank latency, interval changes, shader compiles, JIT invalidation |
 | `debug.hakux.watch 0x862494` | setprop before each run's savestate load (each new game process reads it) | Fable changing its presentation interval |
 | Sensors **every 1 s**: CPU cur freq and max (cap) per policy (0, 2, 5, 7), GPU `clock_mhz`, `max_clock_mhz`, `gpu_busy_percentage`, GPU temp, gpuss 32-39 max, battery temp. Thermal status every 5 s only (dumpsys is heavy) | sysfs reads in a loop | clocks/caps around a stutter; thermal limits |
-| **Per-thread scheduler stats** of the game's process at the start and end of the replay: `/proc/<pid>/task/<tid>/schedstat` (time on CPU, **time waiting for a CPU**, timeslices), `stat` field 39 (last CPU), `comm` | `run-as` (the app's own `/proc` entries), piped to `schedstat_start.txt` / `schedstat_end.txt` | host starvation, measured directly: run-queue wait per thread |
-| Which tid is which: `thread vCPU: tid N` (and render, decode, present), logged by every build from build 14 on whether performance hints are on or off; older builds only log `hint session: ... (vCPU N, render N, ...)`, which is missing when hints are off | logcat (`hakuX-native-perf`) | names for the stats above |
-| **Display timing**: `dumpsys SurfaceFlinger --latency "<layer>"` every 2 s (the last 127 frames each), the layer being hakuX's SurfaceView from `dumpsys SurfaceFlinger --list` (the `(BLAST)` one), found again when it changes | dumpsys, to `sflatency.txt` | what the compositor actually presented vs. what hakuX flipped |
+| **Per-thread scheduler stats** of the game's process at the start and end of the replay: `/proc/<pid>/task/<tid>/schedstat` (time on CPU, **time waiting for a CPU**, timeslices), `stat` field 39 (last CPU), `comm`; lines `<tid> <run_ns> <wait_ns> <slices> <last_cpu> <name>` | `run-as` (the app's own `/proc` entries), piped to `schedstat_start.txt` / `schedstat_end.txt` | host starvation, measured directly: run-queue wait per thread |
+| Which thread is which: by name. `SDLThread` (the vCPU: the tid hakuX logs as `thread vCPU: tid N` from build 14 on, else the busiest `SDLThread`), `hle-pb` (decoder), `hle.render`, `SDLActivity` (the app's main thread), `apu.frame`; a name several threads share: the busiest | the schedstat files' names (logcat `hakuX-native-perf` for the vCPU's tid where logged) | names for the stats above |
+| **Display timing**: `dumpsys SurfaceFlinger --latency "<layer>"` every 2 s (the last 127 frames each). The layer name must be exact, its `#<id>` included (`SurfaceView[com.rfandango.haku_x.debug/com.rfandango.haku_x.NativeCoreActivity]@0(BLAST)#30759`): it is cut out of `dumpsys SurfaceFlinger --list`'s line (`RequestedLayerState{... parentId=...}` on Android 14+) and read again every time (each run's process makes a new layer; the newest `(BLAST)` one). Also `dumpsys SurfaceFlinger --timestats` over the run (`-clear -enable` at the start, `-dump` at the end), the report's fallback | dumpsys, to `sflatency.txt` and `sftimestats.txt` | what the compositor actually presented vs. what hakuX flipped |
 | Display at batch start: `mActiveModeId`, `mActiveSfDisplayMode` and each `DisplayDeviceInfo` (refresh, an external/DeX display) | `dumpsys display \| grep` (on the phone: `grep`, not `findstr`) | 60 vs 120 Hz output, external display |
 | Charging at run start and end: `dumpsys battery` (AC/USB powered, status, level, temperature) and any system setting whose name has `pass_through`, `protect_battery` or `charging` | dumpsys / `settings list system \| grep` | heat from charging (Samsung's pass-through setting name isn't documented: the list shows whatever the phone has) |
-| Build identity: `versionName`, `lastUpdateTime`, `codePath`, and the `hakuX-native-mods` lines | `dumpsys package` / logcat | which build and mod ran |
+| Build identity: `versionName`, `lastUpdateTime`, `codePath`, the installed APK's sha256 and, when it is the one `route install` installed, its file name with the branch, build number and commit in it (`apk_file`, `apk_branch`, `apk_build`, `apk_commit`); and the `hakuX-native-mods` lines | `dumpsys package`, `pm path` + `sha256sum`, route.bat's record (`route.sh apkrecord`) / logcat | which build and mod ran |
+| **Run check**: once the replay starts, the mods the game's process applied (its `hakuX-native-mods` `<mod>: [xbe] ...: N bytes` lines) must be the variant's (`mods_expected` / `mods_applied` in `run.txt`), and a variant's `debug.hakux.opts` must have been read (`hakuX-app` `debug.hakux.opts:` lines). A run that fails gets `failed=` in `run.txt`, is cut short and kept out of the report (listed under "Failed runs"); a variant failing twice stops the batch | logcat | a variant that didn't take effect |
 | `cpu: translations of ... dropped`: count per run and the most in any 10 s | logcat | FEX code invalidation (Fable's pager) |
 
 Summary columns per run (`summary.csv`): fps, stutters (and per minute), ms
@@ -84,9 +85,12 @@ over the frame time, worst frame, hangs, work ms, max gpuss and battery
 temperature, the lowest big/prime caps, average cpu7 and GPU clocks; vblank
 answer avg / max / over 2 ms / over 8 ms / unanswered, flip delay avg / max;
 presentation interval at the start, its changes and values; run kind; start
-temperature; run-queue wait ms of the vCPU, render, decode and present
-threads and the vCPU's time on a CPU; JIT drops and the most in 10 s;
-SurfaceFlinger presented frames, gaps over 20 ms and the longest gap.
+temperature; ms on a CPU and waiting for one of the vCPU (`SDLThread`),
+decoder (`hle-pb`), `hle.render`, main (`SDLActivity`) and `apu.frame`
+threads; JIT drops and the most in 10 s; SurfaceFlinger presented frames,
+gaps over 1.5 times the median frame interval, the longest gap, the median
+interval and the source (`latency`, or `timestats` when the latency samples
+held no frames); the mods the run applied.
 
 ## 2. Probe runs (one per scene per batch, not counted in A/B)
 
@@ -129,14 +133,16 @@ batch, so both scenes get both probes over two batches.
 
 A variant is `label:name=value,name=value`. Properties are set before the
 run. The app's settings (render scale, async shaders, prebuild, the GPU
-driver, the mods) are passed to the core as start-up options; the runner
-overrides them for one run through `debug.hakux.opts` (build 14 and later),
-leaving the app's settings untouched.
+driver) are passed to the core as start-up options; the runner overrides
+them for one run through `debug.hakux.opts` (builds after 14: build 14 reads
+the property but mixes up the app's own options), leaving the app's
+settings untouched. Mods are switched in the app's per-game mod choices
+instead (any build), and put back at the end.
 
 | Batch | Command (`route suite A B`) | Hypothesis tested |
 |---|---|---|
 | V1 | `route suite base nohints:adpf=0` | scheduler hints reduce run-queue waits |
-| V2 | `route suite fps60:mod=60fps fps40:mod=40fps` | late flips with frames ready are a 60 fps pacing issue vs. the emulator's (`mod=40fps` also sets 120 Hz vblanks, as the mod asks; 40 fps needs a 120 Hz screen to show) |
+| V2 | `route suite fps60:mod=60fps fps40:mod=40fps` | late flips with frames ready are a 60 fps pacing issue vs. the emulator's (`mod=<id>` turns that mod on and every other mod of the game off in the app's own mod choices, `files/mod_choices.json`, which each new game process reads; the 40 fps mod asks for 120 Hz vblanks itself; 40 fps needs a 120 Hz screen to show. The choices are put back after the batch) |
 | V3 | `route suite base async0:asyncpipe=0` | skipped draws / pop-in and hitches from shader compiles |
 | V4 | `route suite base cold:cold=1` | cold shader and pipeline caches vs. warm. Every run already starts a fresh emulator process (a savestate load restarts the core), so a process restart alone isn't "cold": `cold=1` deletes the caches (`files/native/hle/`) before the run. The B runs after it then rebuild what the route needs, so B is warm again. |
 | V5 | `route suite base sysdrv:driver=system` | GPU driver behaviour, GPU clock ramp-up (the phone's Qualcomm driver vs. the custom `vulkan.purple` from the settings) |
@@ -174,20 +180,24 @@ wood` (with `SLOT=2` in `route.cfg`) records one you play instead.
 ## 5. What is uploaded per batch (diag-results, routes/<batch>-<date>-<time>/)
 
 - `batch.txt`: variants, scenes, runs, build (versionName, lastUpdateTime,
-  codePath), phone, display mode, charging state, caps at start, skipped scenes.
+  codePath, the APK's sha256, file name, branch, build number, commit), phone, display mode, charging state, caps at start, skipped scenes.
 - `report.txt`, `summary.csv`: with the columns above.
 - Per run (`<NN>-<scene>-<label>/`): `logcat.txt`, `sensors.csv` (1 s),
-  `run.txt` (variant, kind, settings, start/end time, start temperature,
-  charging at start and end), `schedstat_start.txt`, `schedstat_end.txt`,
-  `sflatency.txt`.
-- Probe runs: `simpleperf_symbols.txt`, `simpleperf_threads.txt`,
-  `perfetto.txt` / `simpleperf.txt` (their console output). The Perfetto
+  `run.txt` (variant, kind, settings, the mods expected and applied, start/end
+  time, start temperature, charging at start and end, `failed=` if its check
+  failed), `schedstat_start.txt`, `schedstat_end.txt`, `sflatency.txt`,
+  `sftimestats.txt`.
+- Probe runs: `simpleperf_symbols.txt`, `simpleperf_threads.txt`; in
+  `run.txt` the tool's exit status (`probe_exit`), its output's size
+  (`probe_output_bytes`) and simpleperf's sample count; `perfetto.txt` /
+  `simpleperf.txt` (their console output) only when they printed something. The Perfetto
   trace (`trace.pftrace`) and `perf.data` are large and stay in
   `C:\hakuX-tests\routes` unless `UPLOAD_TRACES=1` is set before running.
 
 ## Requirements
 
-- The hakuX debug APK from build 14 on (`route install`): `debug.hakux.opts`
-  for the app-setting variants, the `thread ...: tid` lines.
+- The hakuX debug APK installed with `route install` (so `batch.txt` names
+  it); a build after 14 for the app-setting variants (`debug.hakux.opts`).
+  The mod variants, thread stats and display timing work with any build.
 - Savestates: slot 1 in Bowerstone, slot 2 in Great Wood.
 - Git for Windows on the PC for the uploads.

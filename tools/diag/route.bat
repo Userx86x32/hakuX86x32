@@ -89,6 +89,11 @@ rem the APK: a file or URL (%1 of the call), else the test build
 :install_apk
 set "APK=%~1"
 if "%APK%"=="" set "APK=%APK_URL%"
+rem the APK's file name (a URL's last part), recorded on the phone for batch.txt
+set "APKNAME=%APK%"
+:apkname_cut
+if not "%APKNAME:*/=%"=="%APKNAME%" (set "APKNAME=%APKNAME:*/=%" & goto apkname_cut)
+for %%F in ("%APKNAME%") do set "APKNAME=%%~nxF"
 if /i "%APK:~0,4%"=="http" (
   echo downloading %APK%
   curl.exe -L --fail -o "%HERE%hakux-test.apk" "%APK%" || (echo download failed & exit /b 1)
@@ -102,6 +107,8 @@ if errorlevel 1 (
   echo or let route do it all, keeping savestates and saves:   route reinstall
   exit /b 1
 )
+rem which APK is installed, for each batch's batch.txt (apk_file, apk_build, apk_commit)
+call :push_scripts && "%ADB%" shell sh /data/local/tmp/hakux/route.sh apkrecord "%APKNAME%"
 if not "%REINST%"=="1" echo installed. Start Fable once by hand so hakuX remembers it, then: route auto
 exit /b 0
 

@@ -28,21 +28,30 @@
 #   clean
 #       The properties the runner sets, cleared (after a batch was cut off).
 #   start <command ...> / watch / stop / status / report <batch dir>
+#   apkrecord <apk file name>
+#       Notes the APK route.bat just installed (its name, the installed
+#       APK's sha256) for batch.txt's build identity.
 #
 # A variant is label:name=value,name=value. Names:
 #   adpf, vcpucore, ... (or debug.anything): a property, set before the run
 #   scale=2|3, asyncpipe=0|1, prebuild=0|1: hakuX core options (the app's
 #       settings overridden for the run through debug.hakux.opts)
 #   driver=system: the phone's own Vulkan driver, not the custom one
-#   mod=40fps|60fps|none: only that mod on (40fps also sets 120 Hz vblanks;
-#       mod=<id>@<hz> for another rate)
+#   mod=40fps|60fps|none: only that mod on, the others off, in the app's
+#       own mod choices for the game (files/mod_choices.json, read by each
+#       new game process; 40fps's mod.txt asks for 120 Hz vblanks itself);
+#       the choices are put back at the end, and a variant without mod= in
+#       the same batch runs with them as they were. Each run checks the mods
+#       the core applied (its hakuX-native-mods lines) and fails otherwise;
+#       a variant failing twice stops the batch.
 #   cold=1: the shader and pipeline caches cleared before the run
 # Each run starts from the variant's settings alone: whatever another
 # variant set is put back first.
 #
 # Output: /sdcard/hakux_diag/routes/<batch>-<time>/<NN>-<scene>-<label>/
 # (logcat.txt, sensors.csv, run.txt, schedstat_start.txt, schedstat_end.txt,
-# sflatency.txt; probes: trace.pftrace, perf.data, simpleperf_*.txt), with
+# sflatency.txt, sftimestats.txt; probes: trace.pftrace, perf.data,
+# simpleperf_*.txt), with
 # batch.txt, report.txt and summary.csv beside the runs.
 PKG=com.rfandango.haku_x.debug
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -94,6 +103,12 @@ save_props() {
   for p in $RUNNER_PROPS; do echo "$p=" >> $TMPD/hakux_route_props; done
   STAYON=$(settings get global stay_on_while_plugged_in 2>/dev/null)
   svc power stayon usb 2>&1 | cat > /dev/null   # the screen stays on while plugged in (put back after)
+  # the app's mod choices, when a variant changes them (put back after;
+  # "-" for a file that wasn't there: the app then reads its old preferences)
+  if [ -n "$MOD_BATCH" ] && [ ! -f $TMPD/hakux_route_modchoices ]; then
+    run-as $PKG cat files/mod_choices.json > $TMPD/hakux_route_modchoices 2>/dev/null ||
+      echo - > $TMPD/hakux_route_modchoices
+  fi
 }
 saved_value() { sed -n "s/^$1=//p" $TMPD/hakux_route_props; }
 restore() {
@@ -101,6 +116,7 @@ restore() {
   while IFS== read -r p v; do setprop "$p" "$v"; done < $TMPD/hakux_route_props
   setprop debug.hakux.state ''          # not put back: a new value would load a state
   rm -f $TMPD/hakux_route_props
+  put_back_mod_choices && rm -f $TMPD/hakux_route_modchoices
   [ -n "$STAYON" ] && settings put global stay_on_while_plugged_in "$STAYON" 2>&1 | cat > /dev/null
   stop_capture
 }
@@ -232,17 +248,35 @@ start_capture() {
     done' > "$cap_dir/sensors.csv" 2>&1 &
   PIDS="$PIDS $!"
   # every 2 s: the last 127 frames SurfaceFlinger presented of hakuX's
-  # SurfaceView (desired, actual present, ready; ns), the layer found again
-  # when it changes (each run's new process makes a new one)
+  # SurfaceView (desired, actual present, ready; ns). --latency wants the
+  # layer's exact name, its "#<id>" included, and --list wraps it
+  # ("RequestedLayerState{47d71ac SurfaceView[...]@0(BLAST)#30759
+  # parentId=...}" on Android 14 and later): the name alone, read again each
+  # time (each run's new process makes a new layer); the newest (highest
+  # id) BLAST one when the old one is still listed
   sh -c '
     while true; do
-      l=$(dumpsys SurfaceFlinger --list 2>/dev/null | grep "SurfaceView\[$0" | grep -m1 BLAST)
-      [ -n "$l" ] || l=$(dumpsys SurfaceFlinger --list 2>/dev/null | grep -m1 "SurfaceView\[$0")
+      l=$(dumpsys SurfaceFlinger --list 2>/dev/null | awk -v pkg="SurfaceView[$0/" "
+        i = index(\$0, pkg) {
+          n = substr(\$0, i); sub(/[ }].*\$/, \"\", n)
+          id = n; if (!sub(/^.*#/, \"\", id) || id !~ /^[0-9]+\$/) id = 0
+          b = (n ~ /BLAST/)
+          if (best == \"\" || b > bb || (b == bb && id + 0 > bid)) { best = n; bb = b; bid = id + 0 }
+        }
+        END { print best }")
       echo "## $(date +%H:%M:%S) $l"
       [ -n "$l" ] && dumpsys SurfaceFlinger --latency "$l" 2>/dev/null | cat
       sleep 2
     done' $PKG > "$cap_dir/sflatency.txt" 2>&1 &
   PIDS="$PIDS $!"
+  # SurfaceFlinger's own frame statistics from now on (the report's second
+  # source for presented frames: present-to-present histogram per layer)
+  dumpsys SurfaceFlinger --timestats -disable -clear -enable 2>&1 | cat > /dev/null
+}
+# The statistics since start_capture, then off again.
+dump_timestats() {
+  dumpsys SurfaceFlinger --timestats -dump 2>/dev/null | cat > "$1/sftimestats.txt"
+  dumpsys SurfaceFlinger --timestats -disable -clear 2>&1 | cat > /dev/null
 }
 stop_capture() {
   for p in $PIDS; do kill "$p" 2>/dev/null; done
@@ -269,26 +303,39 @@ power_state() {
 }
 
 # ---- probes: mid-route, PROBE_SECS long ----
+# A probe's tool's exit status and output size in run.txt; its console output
+# kept as <tool>.txt only when it printed something (a quiet run printed
+# nothing, and an empty file said less than run.txt does).
+probe_result() {   # status run_dir tool output_file
+  { echo "probe_exit=$1"; echo "probe_output_bytes=$(wc -c < "$4" 2>/dev/null | tr -d ' ')"; } >> "$2/run.txt"
+  if [ -s "$TMPD/hakux_probe_out" ]; then cp "$TMPD/hakux_probe_out" "$2/$3.txt"; fi
+  rm -f "$TMPD/hakux_probe_out"
+}
 run_probe() {   # kind run_dir
   case "$1" in
   perfetto)
     tf=${HAKUX_TRACE_FILE:-/data/misc/perfetto-traces/hakux-route.pftrace}
     rm -f "$tf"
     sed "s/^duration_ms: .*/duration_ms: $((PROBE_SECS * 1000))/" "$HERE/route_trace.pbtx" |
-      perfetto --txt -c - -o "$tf" > "$2/perfetto.txt" 2>&1
-    cp "$tf" "$2/trace.pftrace" 2>/dev/null || say "probe: no Perfetto trace (see perfetto.txt)"
+      perfetto --txt -c - -o "$tf" > "$TMPD/hakux_probe_out" 2>&1
+    probe_result $? "$2" perfetto "$tf"
+    cp "$tf" "$2/trace.pftrace" 2>/dev/null || say "probe: no Perfetto trace (see run.txt, perfetto.txt)"
     ;;
   simpleperf)
     pd=$TMPD/hakux-perf.data
     rm -f "$pd"
     # --app: a debuggable app's process, profiled through run-as
-    simpleperf record --app $PKG -g -f 1000 --duration "$PROBE_SECS" -o "$pd" > "$2/simpleperf.txt" 2>&1
+    simpleperf record --app $PKG -g -f 1000 --duration "$PROBE_SECS" -o "$pd" > "$TMPD/hakux_probe_out" 2>&1
+    probe_result $? "$2" simpleperf "$pd"
     if [ -s "$pd" ]; then
+      # its sample count (report's header: "Samples: N", "Event count: N")
+      simpleperf report -i "$pd" --sort comm 2>/dev/null | grep -m2 -E "^(Samples|Event count):" |
+        sed 's/^/probe_/; s/: */=/; s/ /_/' >> "$2/run.txt"
       simpleperf report -i "$pd" --sort dso,symbol --percent-limit 0.5 2>&1 | cat > "$2/simpleperf_symbols.txt"
       simpleperf report -i "$pd" --sort comm,dso --percent-limit 0.5 2>&1 | cat > "$2/simpleperf_threads.txt"
       cp "$pd" "$2/perf.data"
     else
-      say "probe: no CPU profile (see simpleperf.txt)"
+      say "probe: no CPU profile (see run.txt, simpleperf.txt)"
     fi
     ;;
   prof)
@@ -314,27 +361,72 @@ variant_props() {
   done | sort -u | tr '\n' ' '
 }
 
-# The core options' manifest for mod=<id>[@<hz>]: the app's last one (every
-# mod on or off), only <id> on; its vblank rate as asked (40fps: 120 Hz).
-mod_manifest() {
-  id=${1%@*}; hz=${1#*@}; [ "$hz" = "$1" ] && hz=
-  [ -z "$hz" ] && case "$id" in *40fps*) hz=120;; esac
-  m=$APPDIR/mods-$id.txt
-  run-as $PKG cat files/native/mods.txt 2>/dev/null |
-    awk -F'\t' -v OFS='\t' -v id="$id" -v hz="$hz" '
-      $1 == "refresh" { next }
-      $1 == "patch" || $1 == "patchoff" { $1 = ($3 == id) ? "patch" : "patchoff" }
-      { print }
-      END { if (hz != "") print "refresh", hz }' |
-    run-as $PKG sh -c "cat > $m"
-  run-as $PKG grep -q "^patch	.*	$id	" "$m" 2>/dev/null || [ "$id" = none ] || return 1
-  echo "$m"
+# ---- mods: the app's own per-game choices ----
+# The game key of the savestate in slot $1 (its folder: the app's game key,
+# title ID and version, 4D5300D1.1).
+slot_game() {
+  run-as $PKG sh -c "ls files/native/states/*/slot$1.hxs" 2>/dev/null | head -n 1 |
+    sed 's|^.*states/||; s|/slot[0-9]*\.hxs$||'
 }
 
-# Sets one variant up (label:name=value,...): the batch's variant properties
-# put back first, then this one's; prints what it set (for run.txt).
+# The app's mod choices as JSON entries ("key":true, one a line, with the
+# key unescaped first, then a tab, then the entry as written): the file
+# (org.json escapes "/" as "\/"), or if it was never written, the shared
+# preferences it replaced (per_game_mods).
+mod_choice_entries() {
+  { run-as $PKG cat files/mod_choices.json 2>/dev/null ||
+      run-as $PKG cat shared_prefs/per_game_mods.xml 2>/dev/null |
+        sed -n 's|.*<boolean name="\(.*\)" value="true" */>.*|"\1":true|p'; } |
+    awk '{ s = s $0 } END {
+      while (match(s, /"([^"\\]|\\.)*"[ \t]*:[ \t]*true/)) {
+        e = substr(s, RSTART, RLENGTH); s = substr(s, RSTART + RLENGTH)
+        k = e; sub(/"[ \t]*:[ \t]*true$/, "", k); sub(/^"/, "", k); gsub(/\\\//, "/", k)
+        print k "\t" e
+      }
+    }'
+}
+
+# The mods on for game $1 in the app's choices (sorted, space-separated).
+mods_on() {
+  mod_choice_entries | awk -F'\t' -v p="$1/mod/" 'index($1, p) == 1 { print substr($1, length(p) + 1) }' |
+    sort | tr '\n' ' ' | sed 's/ $//'
+}
+
+# The mods with XBE patches (the app's last manifest lists every mod's).
+mods_with_patches() {
+  run-as $PKG cat files/native/mods.txt 2>/dev/null | awk -F'\t' '$1 == "patch" || $1 == "patchoff" { print $3 }' | sort -u
+}
+
+# Game $1: only mod $2 on (none: every mod off); cheats and other games kept.
+# Written whole and renamed into place, as the app writes it.
+set_mod_choice() {
+  mod_choice_entries | awk -F'\t' -v game="$1" -v id="$2" '
+    index($1, game "/mod/") != 1 { out = out (out == "" ? "" : ",") $2 }
+    END {
+      if (id != "none") out = out (out == "" ? "" : ",") "\"" game "/mod/" id "\":true"
+      print "{" out "}"
+    }' | run-as $PKG sh -c 'cat > files/mod_choices.json.route && mv files/mod_choices.json.route files/mod_choices.json'
+}
+
+# The choices as they were before the batch.
+put_back_mod_choices() {
+  f=$TMPD/hakux_route_modchoices
+  [ -f "$f" ] || return 0
+  if [ "$(cat "$f")" = - ]; then
+    run-as $PKG rm -f files/mod_choices.json
+  else
+    cat "$f" | run-as $PKG sh -c 'cat > files/mod_choices.json.route && mv files/mod_choices.json.route files/mod_choices.json'
+  fi
+}
+
+# Sets one variant up (label:name=value,...) for a run from slot $2: the
+# batch's variant properties and mod choices put back first, then this
+# one's; prints what it set (for run.txt), and the mods the run must apply
+# (mods_expected=, checked against the log once the run starts).
 set_variant() {
   for p in $VARIANT_PROPS; do setprop "$p" "$(saved_value "$p")"; done
+  [ -n "$MOD_BATCH" ] && put_back_mod_choices
+  game=$(slot_game "$2")
   opts=
   for kv in $(echo "${1#*:}" | tr ',' ' '); do
     [ "$kv" = "$1" ] && break
@@ -342,9 +434,13 @@ set_variant() {
     case "$p" in
       scale|asyncpipe|prebuild) opts="$opts $p=$v";;
       driver) [ "$v" = system ] && opts="$opts vkdriver=none";;
-      mod) mf=$(mod_manifest "$v") ||
+      mod) [ -n "$game" ] || die "mod $v: no savestate in slot $2 (its folder names the game)"
+           [ "$v" = none ] || mods_with_patches | grep -qx "$v" ||
              die "mod $v: not in hakuX's mod list for this game (files/native/mods.txt; run the game once)"
-           opts="$opts mods=$mf";;
+           set_mod_choice "$game" "$v"
+           [ "$(mods_on "$game")" = "${v#none}" ] ||
+             die "mod $v: the app's mod choices didn't take it (files/mod_choices.json: $(mods_on "$game"))"
+           echo "mod_choice=$game: ${v} only";;
       cold) if [ "$v" = 1 ]; then
               run-as $PKG sh -c 'rm -rf files/native/hle/*' && echo "cold: shader and pipeline caches cleared"
             fi;;
@@ -356,6 +452,47 @@ set_variant() {
   [ ${#opts} -le 91 ] || die "variant $1: its options are too long for debug.hakux.opts (91 characters)"
   setprop debug.hakux.opts "$opts"
   echo "debug.hakux.opts=$opts"
+  # the mods on in the choices that patch the XBE (each logs "<mod>: [xbe] ...: N bytes")
+  # ("?": unknown, no game key or no manifest yet: not checked)
+  exp=; pm=$(mods_with_patches)
+  if [ -n "$game" ] && [ -n "$pm" ]; then
+    for m in $(mods_on "$game"); do echo "$pm" | grep -qx "$m" && exp="$exp $m"; done
+  else
+    exp=" ?"
+  fi
+  echo "mods_expected=${exp# }"
+}
+
+# What the run's game process (pid $2, logcat $1) applied: its mods with
+# XBE patches applied (sorted), and its debug.hakux.opts options.
+mods_applied() {
+  grep "hakuX-native-mods( *$2):" "$1" | sed -n 's/^.*): \([A-Za-z0-9._-]*\): \[.*\] [0-9a-f]*: [0-9]* bytes$/\1/p' |
+    sort -u | tr '\n' ' ' | sed 's/ $//'
+}
+opts_applied() {
+  grep "hakuX-app( *$2): debug.hakux.opts: " "$1" | sed 's/^.*debug.hakux.opts: //' | tr '\n' ' ' | sed 's/ $//'
+}
+
+# The run checked once its replay started: the mods the core applied are
+# the variant's, and its debug.hakux.opts were read. 1, with failed= in
+# run.txt, when not.
+check_run() {
+  rd=$1
+  spid=$(grep -m1 "pad script: started" "$rd/logcat.txt" | sed -n 's/^[^(]*( *\([0-9]*\)).*/\1/p')
+  want=$(sed -n 's/^mods_expected=//p' "$rd/run.txt")
+  got=$(mods_applied "$rd/logcat.txt" "$spid")
+  echo "mods_applied=$got" >> "$rd/run.txt"
+  grep -h "hakuX-native-mods( *$spid): vblank at" "$rd/logcat.txt" | sed 's/^.*): /mods_vblank=/' | head -n 1 >> "$rd/run.txt"
+  bad=
+  [ "$got" = "$want" ] || [ "$want" = "?" ] || bad="mods: the variant's are '${want:-none}', the core applied '${got:-none}'"
+  o=$(sed -n 's/^debug.hakux.opts=//p' "$rd/run.txt")
+  if [ -n "$o" ] && [ "$(opts_applied "$rd/logcat.txt" "$spid")" != "$o" ]; then
+    bad="${bad:+$bad; }debug.hakux.opts '$o' not read by the game (this APK is older than build 14, or the property didn't reach it)"
+  fi
+  [ -z "$bad" ] && return 0
+  echo "failed=$bad" >> "$rd/run.txt"
+  say "run $NRUN FAILED: $bad"
+  return 1
 }
 
 # The route into the app's files (through a pipe: run-as can't read a file
@@ -375,6 +512,7 @@ new_batch() {   # name, then the variants
   {
     echo "variants=$*"; echo "scenes=$SCENES"; echo "runs=$RUNS"; echo "route_secs=$ROUTE_SECS"
     echo "build:"; dumpsys package $PKG 2>/dev/null | grep -E "versionName|lastUpdateTime|codePath" | sed 's/^ */  /'
+    apk_identity
     getprop ro.product.model; getprop ro.build.fingerprint
     echo "display:"; dumpsys display 2>/dev/null | grep -E "mActiveModeId|mActiveSfDisplayMode|DisplayDeviceInfo\{" |
       sed 's/^ */  /' | cut -c1-300 | head -n 8
@@ -383,6 +521,36 @@ new_batch() {   # name, then the variants
     echo "caps (scaling_max_freq):"; cat /sys/devices/system/cpu/cpufreq/policy*/scaling_max_freq
   } > "$BATCH/batch.txt"
   NRUN=0
+}
+
+# Which APK is installed: its sha256, and the APK file "route install" put
+# there (route.bat records it: apkrecord) when the sha256 is that one's,
+# with the build number, commit and branch its name carries
+# (hakuX-debug-<branch>-<build>-<commit>-<cpu>.apk).
+installed_apk() { pm path $PKG 2>/dev/null | sed -n 's/^package://p' | grep -m1 'base\.apk$'; }
+apk_sha() { f=$(installed_apk); [ -n "$f" ] && sha256sum "$f" 2>/dev/null | cut -d' ' -f1; }
+apk_identity() {
+  sha=$(apk_sha); rec=$TMPD/hakux_apk.txt
+  echo "  apk_sha256=${sha:-NA}"
+  if [ -n "$sha" ] && [ -f "$rec" ] && [ "$(sed -n 's/^sha256=//p' "$rec")" = "$sha" ]; then
+    name=$(sed -n 's/^file=//p' "$rec")
+    echo "  apk_file=$name"
+    echo "  apk_installed=$(sed -n 's/^time=//p' "$rec")"
+    echo "$name" | sed -n 's/^hakuX-debug-\(.*\)-\([0-9][0-9]*\)-\([0-9a-f]\{7,40\}\)-\([a-z0-9]*\)\.apk$/  apk_branch=\1\
+  apk_build=\2\
+  apk_commit=\3\
+  apk_cpu=\4/p'
+  else
+    echo "  apk_file=unknown (not installed by \"route install\" since route.bat records it: install it with route install)"
+  fi
+}
+
+# route.bat after an install: the APK file's name, and the installed APK's sha256.
+cmd_apkrecord() {
+  sha=$(apk_sha)
+  [ -n "$sha" ] || die "apkrecord: $PKG isn't installed"
+  { echo "file=$1"; echo "sha256=$sha"; echo "time=$(date '+%Y-%m-%d %H:%M:%S')"; } > $TMPD/hakux_apk.txt
+  say "recorded: $1 (sha256 $sha)"
 }
 
 # The settings in use (route.cfg's, if it was found), at the start of a batch.
@@ -420,7 +588,7 @@ one_run() {
   {
     echo "variant=${v%%:*}"; echo "kind=$kind"; echo "scene=$scene"; echo "slot=$slot"
     echo "debug.hakux.watch=$WATCH"
-    set_variant "$v"
+    set_variant "$v" "$slot"
     echo "start=$(date)"; echo "start_gpuss_C=$(gpuss_c)"
     echo "battery_dC=$(cat /sys/class/power_supply/battery/temp 2>/dev/null)"
     echo "power at start:"; power_state
@@ -435,6 +603,18 @@ one_run() {
   load_slot "$slot"
   if wait_log "$RUN_DIR/logcat.txt" "pad script: started" 120; then
     snap_threads "$RUN_DIR/schedstat_start.txt"
+    if ! check_run "$RUN_DIR"; then
+      # the same variant again would fail the same way: the batch stops on
+      # its second failure (A and B alternate: "in a row" never happens)
+      stop_capture
+      { echo "end=$(date)"; echo "power at end:"; power_state; } >> "$RUN_DIR/run.txt"
+      setprop debug.hakux.state ''
+      case " $RUNFAILS " in
+        *" ${v%%:*} "*) die "variant ${v%%:*} failed its check twice ($(sed -n 's/^failed=//p' "$RUN_DIR/run.txt"))";;
+      esac
+      RUNFAILS="$RUNFAILS ${v%%:*}"
+      return 0
+    fi
     say "replaying..."
     if [ "$kind" != measure ]; then
       mid=$(( $(route_secs "$scene") / 2 - PROBE_SECS / 2 ))
@@ -444,6 +624,7 @@ one_run() {
     fi
     wait_log "$RUN_DIR/logcat.txt" "pad script: done" 1800 || say "run $NRUN: the replay didn't finish"
     snap_threads "$RUN_DIR/schedstat_end.txt"
+    dump_timestats "$RUN_DIR"
     sleep 3
   else
     say "run $NRUN: the replay didn't start (see $RUN_DIR/logcat.txt)"
@@ -536,6 +717,7 @@ cmd_run() {
   [ "$(route_steps "$name")" -ge 1 ] || die "route $name has no steps ($OUT/$name.txt): record it, or: route tour $name"
   mkdir -p "$OUT" || die "can't write $OUT"
   VARIANT_PROPS=$(variant_props "$@")
+  case " $* " in *[:,]mod=*) MOD_BATCH=1;; esac
   save_props
   ready_scene "$name"
   new_batch "$name" "$@"
@@ -555,12 +737,15 @@ cmd_run() {
   sh "$HERE/route_report.sh" "$BATCH"
 }
 
+RUNFAILS=                   # the variants whose run failed its check (one each is allowed)
+
 # The 30-minute batch (docs/diag-suite.md): per scene, RUNS measurement runs
 # A B A B ..., then one probe run on A; the probes swap scenes each batch.
 cmd_suite() {
   [ $# -ge 1 ] || die "suite needs a variant (A), and usually a second (B)"
   mkdir -p "$OUT" || die "can't write $OUT"
   VARIANT_PROPS=$(variant_props "$@")
+  case " $* " in *[:,]mod=*) MOD_BATCH=1;; esac
   save_props
   name=suite; [ -n "$SUITE_NAME" ] && name=$SUITE_NAME
   # the same suite again after it was cut off (Auto Blocker, the cable): its
@@ -675,7 +860,8 @@ cmd_clean() {
   setprop debug.hakux.env "$(without_pad "$(getprop debug.hakux.env)")"
   setprop debug.hakux.env2 "$(without_pad "$(getprop debug.hakux.env2)")"
   for p in debug.hakux.state $RUNNER_PROPS; do setprop "$p" ''; done
-  say "cleared: the replay and recording (NC_PAD_ in debug.hakux.env, env2), state, opts, perf"
+  put_back_mod_choices && rm -f $TMPD/hakux_route_modchoices
+  say "cleared: the replay and recording (NC_PAD_ in debug.hakux.env, env2), state, opts, perf; mod choices put back"
   say "(vcpucore, adpf and watch left as they are; restarting the phone clears them all)"
 }
 
@@ -717,5 +903,6 @@ case "$1" in
   record) shift; cmd_record "$@";;
   run) shift; cmd_run "$@";;
   report) shift; sh "$HERE/route_report.sh" "$@";;
-  *) sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
+  apkrecord) shift; cmd_apkrecord "$@";;
+  *) sed -n '2,54p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
 esac

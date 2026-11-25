@@ -585,7 +585,7 @@ EXPORT int SDL_main(int argc, char *argv[])
         }
     }
     for (int i = 3; i < argc + nextra; i++) {
-        const char *a = i < argc ? a : extra[i - argc];
+        const char *a = i < argc ? argv[i] : extra[i - argc];
         if (i < argc && opt_overridden(a, extra, nextra)) {
             continue;
         }
