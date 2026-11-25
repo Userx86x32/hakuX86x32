@@ -14,7 +14,7 @@ rem A batch runs on the phone by itself: a cable drop doesn't stop it.
 setlocal
 set "HERE=%~dp0"
 set "ADB=adb"
-set "APK_URL=https://github.com/Userx86x32/hakuX86x32/releases/download/build-claude-vibrant-cerf-lmdbik-11/hakuX-debug-claude-vibrant-cerf-lmdbik-11-c987c07-sd865up.apk"
+set "APK_URL=https://github.com/Userx86x32/hakuX86x32/releases/download/build-claude-vibrant-cerf-lmdbik-13/hakuX-debug-claude-vibrant-cerf-lmdbik-13-1df9d50-sd865up.apk"
 where adb >nul 2>nul || if exist "%HERE%platform-tools\adb.exe" (set "ADB=%HERE%platform-tools\adb.exe") else if exist "%HERE%adb.exe" (set "ADB=%HERE%adb.exe") else if exist "C:\hakuX-tests\platform-tools\adb.exe" (set "ADB=C:\hakuX-tests\platform-tools\adb.exe") else if exist "C:\hakuX-tests\adb.exe" (set "ADB=C:\hakuX-tests\adb.exe") else (echo adb not found: put this file next to adb.exe or platform-tools & exit /b 1)
 "%ADB%" get-state >nul 2>nul || (echo no phone: check the cable and USB debugging, and allow this PC on the phone & exit /b 1)
 if /i "%1"=="pull" goto pull
