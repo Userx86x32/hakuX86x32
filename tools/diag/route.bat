@@ -17,6 +17,13 @@ rem   route tour bower 75    a hands-off route alone (75 seconds)
 rem   route run bower 6 x4:vcpucore=1 all:vcpucore=0   one scene (slot 1)
 rem Settings (scenes, runs, cool-down...): route.cfg next to this file, if any.
 rem   route record bower     a route you play yourself
+rem   route save 2           a savestate of the running game to slot 2 (get there first)
+rem   route load 2           loads slot 2
+rem   route clean            clears the runner's settings on the phone (after a cut-off batch)
+rem   route backup           savestates, settings, GPU driver and save games to hakux-backup.tar
+rem   route restore          puts hakux-backup.tar back
+rem   route reinstall        backup, uninstall, install the test APK, restore (when an
+rem                          install fails: INSTALL_FAILED_UPDATE_INCOMPATIBLE)
 rem   route watch            follows a batch again (after the cable dropped)
 rem   route stop             stops a batch
 rem   route pull             copies /sdcard/hakux_diag/routes to .\routes
@@ -42,8 +49,13 @@ where adb >nul 2>nul || if exist "%HERE%platform-tools\adb.exe" (set "ADB=%HERE%
   exit /b 1
 )
 if /i "%1"=="upload" goto pull
+set "PKG=com.rfandango.haku_x.debug"
+set "BK=%HERE%hakux-backup.tar"
 if /i "%1"=="pull" goto pull
 if /i "%1"=="install" goto install
+if /i "%1"=="backup" goto backup
+if /i "%1"=="restore" goto restore
+if /i "%1"=="reinstall" goto reinstall
 "%ADB%" shell mkdir -p /data/local/tmp/hakux
 "%ADB%" push "%HERE%route.sh" "%HERE%route_report.sh" "%HERE%route_trace.pbtx" /data/local/tmp/hakux/ >nul || exit /b 1
 if exist "%HERE%route.cfg" ("%ADB%" push "%HERE%route.cfg" /data/local/tmp/hakux/ >nul) else ("%ADB%" shell rm -f /data/local/tmp/hakux/route.cfg)
@@ -56,6 +68,10 @@ if /i "%1"=="report" (
   "%ADB%" shell sh /data/local/tmp/hakux/route.sh %*
   goto pull
 )
+for %%C in (save load clean tour) do if /i "%1"=="%%C" (
+  "%ADB%" shell sh /data/local/tmp/hakux/route.sh %*
+  goto :eof
+)
 "%ADB%" shell sh /data/local/tmp/hakux/route.sh start %* || exit /b 1
 :watch
 set "UPLOAD_AFTER=1"
@@ -64,7 +80,11 @@ echo (following the phone; Ctrl+C or a cable drop leaves it running: route watch
 goto pull
 
 :install
-set "APK=%2"
+call :install_apk %2
+goto :eof
+rem the APK: a file or URL (%1 of the call), else the test build
+:install_apk
+set "APK=%~1"
 if "%APK%"=="" set "APK=%APK_URL%"
 if /i "%APK:~0,4%"=="http" (
   echo downloading %APK%
@@ -76,10 +96,42 @@ if errorlevel 1 (
   echo.
   echo If it says INSTALL_FAILED_UPDATE_INCOMPATIBLE, the APK is signed with another key:
   echo uninstall first with   "%ADB%" uninstall com.rfandango.haku_x.debug
-  echo ^(that removes hakuX debug's settings and savestates: back them up first^)
+  echo or let route do it all, keeping savestates and saves:   route reinstall
   exit /b 1
 )
-echo installed. Start Fable once by hand so hakuX remembers it, then: route auto
+if not "%REINST%"=="1" echo installed. Start Fable once by hand so hakuX remembers it, then: route auto
+exit /b 0
+
+rem ---- backup / restore of the app's own files (run-as: a debug build) ----
+:backup
+call :do_backup
+goto :eof
+:do_backup
+if exist "%BK%" move /y "%BK%" "%HERE%hakux-backup.old.tar" >nul
+echo backing up savestates, settings, GPU driver and save games (let it finish)...
+"%ADB%" exec-out run-as %PKG% tar -cf - files/native/states files/gpu_driver shared_prefs files/native/hdd/Partition1 files/native/hdd/Partition2 > "%BK%"
+tar -tf "%BK%" 2>nul | findstr /c:"files/native/states/" >nul || (echo backup failed: no savestates in %BK% & exit /b 1)
+for %%F in ("%BK%") do echo backup: %%~fF ^(%%~zF bytes^)
+exit /b 0
+
+:restore
+call :do_restore
+goto :eof
+:do_restore
+if not exist "%BK%" (echo no backup: %BK% isn't there & exit /b 1)
+"%ADB%" push "%BK%" /data/local/tmp/hakux-backup.tar >nul || (echo restore failed: push & exit /b 1)
+"%ADB%" shell "cat /data/local/tmp/hakux-backup.tar | run-as %PKG% tar -xf -"
+"%ADB%" shell rm /data/local/tmp/hakux-backup.tar
+"%ADB%" shell "run-as %PKG% sh -c 'ls files/native/states/*/'" | findstr /i hxs >nul && (echo restored: savestates are back) || (echo restore: no savestates on the phone after it & exit /b 1)
+exit /b 0
+
+:reinstall
+set "REINST=1"
+call :do_backup || (echo nothing uninstalled: the backup didn't work & goto :eof)
+"%ADB%" uninstall %PKG%
+call :install_apk %2 || (echo the install failed: your backup is in %BK%, put it back after installing with: route restore & goto :eof)
+call :do_restore
+echo Open hakuX, pick your games folder again if it asks, start Fable once, then: route auto
 goto :eof
 
 :pull

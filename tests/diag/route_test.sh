@@ -20,6 +20,10 @@ cat > "$M/bin/setprop" <<'X'
 printf '%s' "$2" > "$M/props/$1"
 echo "setprop $1=$2" >> "$M/setprops"
 log() { echo "11-25 $(date +%H:%M:%S).000 I/$1(  42): $2" >> "$M/logcat"; }
+if [ "$1" = debug.hakux.state ] && [ "${2%%:*}" = save ] && [ -f "$M/pid" ]; then
+  (sleep 1; echo state > "$M/data/com.rfandango.haku_x.debug/files/native/states/4D5300D1.1/slot${2#save:}.hxs") &
+  echo $! >> "$M/bg"
+fi
 if [ "$1" = debug.hakux.state ] && [ "${2%%:*}" = load ] && [ -f "$M/pid" ]; then
   # the first request comes too early (the game still booting): ignored
   [ -f "$M/booted" ] || { touch "$M/booted"; exit 0; }
@@ -155,6 +159,15 @@ check '[ ! -e "$A/files/native/hle/cache.bin" ] && grep -q "caches cleared" "$B/
 check 'awk "/setprop debug.hakux.adpf=0/ { s = 1 } s && /setprop debug.hakux.adpf=\$/ { r = 1 } END { exit !r }" "$M/setprops"'
 check '[ -s "$B/03-bower-probe-simpleperf/perf.data" ] && grep -q "^report: report" "$B/03-bower-probe-simpleperf/simpleperf_symbols.txt"'
 check 'grep -q "record --app com.rfandango.haku_x.debug" "$M/simpleperf"'
+
+echo "== save and clean (from the PC: route save 2, route clean)"
+sh "$ROOT/tools/diag/route.sh" save 2 > "$M/save.log" 2>&1; cat "$M/save.log"
+check '[ -f "$A/files/native/states/4D5300D1.1/slot2.hxs" ] && grep -q "saved to slot 2" "$M/save.log"'
+check '[ -z "$(cat "$M/props/debug.hakux.state")" ]'
+rm -f "$A/files/native/states/4D5300D1.1/slot2.hxs"
+setprop debug.hakux.opts scale=3; setprop debug.hakux.env NC_PAD_SCRIPT=@x
+sh "$ROOT/tools/diag/route.sh" clean
+check '[ -z "$(cat "$M/props/debug.hakux.opts")" ] && [ -z "$(cat "$M/props/debug.hakux.env")" ]'
 
 echo "== detached: start auto, then watch"
 rm -f "$M/pid" "$M/booted"; : > "$M/logcat"

@@ -23,6 +23,10 @@
 #   record <route>
 #       A route you play: loads the slot and records your controller until
 #       you open hakuX's menu (or press Home).
+#   save <slot> / load <slot>
+#       A savestate of the running game to that slot, or loaded from it.
+#   clean
+#       The properties the runner sets, cleared (after a batch was cut off).
 #   start <command ...> / watch / stop / report <batch dir>
 #
 # A variant is label:name=value,name=value. Names:
@@ -579,6 +583,45 @@ cmd_watch() {
   echo "[route] finished"
 }
 
+# A new value of debug.hakux.state each time (the app acts on a change).
+cmd_save() {
+  slot=$1
+  case "$slot" in [1-9]) ;; *) die "save: a slot from 1 to 9 (got '$slot')";; esac
+  [ -n "$(native_pid)" ] || die "the game isn't running: start Fable and get to the spot first"
+  before=$(run-as $PKG sh -c "ls -l files/native/states/*/slot$slot.hxs" 2>/dev/null)
+  setprop debug.hakux.state ''
+  sleep 1
+  setprop debug.hakux.state "save:$slot"
+  w=0
+  while [ $w -lt 30 ]; do
+    sleep 1; w=$((w + 1))
+    now=$(run-as $PKG sh -c "ls -l files/native/states/*/slot$slot.hxs" 2>/dev/null)
+    if [ -n "$now" ] && [ "$now" != "$before" ]; then
+      sleep 2
+      say "saved to slot $slot"
+      setprop debug.hakux.state ''
+      return 0
+    fi
+  done
+  setprop debug.hakux.state ''
+  die "slot $slot: nothing saved in 30 s (is the game in play, not in a menu or loading?)"
+}
+
+cmd_load() {
+  case "$1" in [1-9]) ;; *) die "load: a slot from 1 to 9 (got '$1')";; esac
+  slot_exists "$1" || die "slot $1 holds no savestate"
+  wait_game
+  load_slot "$1"
+  setprop debug.hakux.state ''
+}
+
+cmd_clean() {
+  for p in debug.hakux.env debug.hakux.env2 debug.hakux.state debug.hakux.opts debug.hakux.perf; do
+    setprop "$p" ''
+  done
+  say "cleared: debug.hakux.env, env2, state, opts, perf (vcpucore, adpf and watch left as they are)"
+}
+
 cmd_stop() {
   [ -f "$OUT/route.pid" ] && kill -TERM "$(cat "$OUT/route.pid")" 2>/dev/null && say "stopping" || say "nothing running"
 }
@@ -589,9 +632,12 @@ case "$1" in
   start) shift; cmd_start "$@";;
   watch) cmd_watch;;
   stop) cmd_stop;;
+  save) shift; cmd_save "$@";;
+  load) shift; cmd_load "$@";;
+  clean) cmd_clean;;
   tour) shift; cmd_tour "$@";;
   record) shift; cmd_record "$@";;
   run) shift; cmd_run "$@";;
   report) shift; sh "$HERE/route_report.sh" "$@";;
-  *) sed -n '2,44p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
+  *) sed -n '2,46p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
 esac

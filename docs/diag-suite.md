@@ -6,10 +6,24 @@ variants to test, each aimed at a possible cause of stutters and dropped
 frames. Batches run in two scenes, Bowerstone and Great Wood, and upload to
 the `diag-results` branch.
 
-Everything is started from the PC (`C:\hakuX-tests`): `route.bat` pushes the
-runner to the phone, starts it there detached, follows it, and pulls and
-uploads the results. Settings live in `route.cfg` next to `route.bat` (start
-from `tools/diag/route.cfg.example`).
+Everything is typed on the PC (`C:\hakuX-tests`), never on the phone:
+`route.bat` pushes the runner to the phone, starts it there detached, follows
+it, and pulls and uploads the results. Settings live in `route.cfg` next to
+`route.bat` (start from `tools/diag/route.cfg.example`).
+
+| Command | What it does |
+|---|---|
+| `route suite A [B]` | the batch below |
+| `route auto` | `route suite x4:vcpucore=1 all:vcpucore=0` |
+| `route run <route> [runs] [variants]` | one scene (slot `SLOT`), then the probes in `PROBES` |
+| `route tour <route> [seconds]` | (re)makes a scene's hands-off route |
+| `route record <route>` | records a route you play |
+| `route save <slot>` / `route load <slot>` | a savestate of the running game to a slot, or loaded from it |
+| `route watch` / `route stop` | follows a batch again after an adb drop / stops it |
+| `route clean` | clears the runner's settings on the phone after a cut-off batch |
+| `route install` / `route reinstall` | installs the test APK / backs up, uninstalls, installs, restores (for a signing-key mismatch) |
+| `route backup` / `route restore` | savestates, settings, GPU driver and save games to and from `hakux-backup.tar` |
+| `route pull` / `route upload` | copies the results to the PC / and to the `diag-results` branch |
 
 ## Principles
 
@@ -139,9 +153,10 @@ about 30 when the phone stays cool. If batches run too long, set `RUNS=4` in
 | End | report, pull, upload | |
 
 Great Wood needs a savestate in slot 2: until there is one, the scene is
-skipped (noted in `batch.txt`). The hands-off route for each scene (`bower`,
-`wood`) is made the first time it runs and kept; record one instead with
-`route record wood` (slot `SLOT`) for a route that suits the scene.
+skipped (noted in `batch.txt`). Play to the spot, then `route save 2` on the
+PC. The hands-off route for each scene (`bower`, `wood`) is made the first
+time it runs and kept; `route tour bower` makes it again, and `route record
+wood` (with `SLOT=2` in `route.cfg`) records one you play instead.
 
 ## 5. What is uploaded per batch (diag-results, routes/<batch>-<date>-<time>/)
 
