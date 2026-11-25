@@ -7,6 +7,8 @@
 #include "native/core/memscan.h"
 #include "native/cpu/cpu.h"
 #include "native/dev/dev.h"
+#include <sys/system_properties.h>
+#include "hw/xbox/hle/prop.h"
 #include "native/kernel/kernel.h"
 #include "hw/xbox/hle/host.h"
 
@@ -611,6 +613,45 @@ void nc_mods_bind(NcVm *vm, NcCpu *cpu, const HleXbeInfo *xbe)
     }
 }
 
+/* debug: debug.hakux.watch "<va>[,<va>...]" (hex, up to 4): each 32-bit
+ * guest word logged when it changes (hakuX-native-watch), with the vblank
+ * count; read at each vblank on the guest CPU's thread, the list re-read
+ * now and then (a new value restarts it, "" stops). */
+#define WATCH_N 4
+static void watch_poll(void)
+{
+    static uint32_t va[WATCH_N], val[WATCH_N];
+    static bool have[WATCH_N];
+    static unsigned n, polls;
+    static char last[PROP_VALUE_MAX];
+    if (polls++ % 30 == 0) {
+        char v[PROP_VALUE_MAX] = "";
+        hle_prop_get("debug.hakux.watch", v);
+        if (strcmp(v, last)) {
+            snprintf(last, sizeof(last), "%s", v);
+            n = 0;
+            for (char *save = NULL, *t = strtok_r(v, ",; ", &save); t && n < WATCH_N;
+                 t = strtok_r(NULL, ",; ", &save)) {
+                va[n] = (uint32_t)strtoul(t, NULL, 16);
+                have[n++] = false;
+            }
+            nc_log("hakuX-native-watch", "watching %u guest words (%s)", n, last[0] ? last : "none");
+        }
+    }
+    for (unsigned i = 0; i < n; i++) {
+        uint32_t w;
+        if (!mem_read(NULL, va[i], &w, 4)) {
+            continue;
+        }
+        if (!have[i] || w != val[i]) {
+            nc_log("hakuX-native-watch", "%08x = %08x (was %08x) at vblank %llu", va[i], w,
+                   have[i] ? val[i] : 0, (unsigned long long)g_vblank);
+            val[i] = w;
+            have[i] = true;
+        }
+    }
+}
+
 void nc_mods_poll(void)
 {
     if (!g_vm) {
@@ -622,6 +663,7 @@ void nc_mods_poll(void)
     }
     g_vblank = v;
     nc_memscan_poll(g_vm);              /* debug.hakux.memscan */
+    watch_poll();                       /* debug.hakux.watch */
     if (!nc_cheat_count()) {
         return;
     }
