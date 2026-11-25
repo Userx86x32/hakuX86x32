@@ -18,6 +18,11 @@
 #       (default: one, "default", as set now).
 # The game starts by itself (the last game hakuX ran, so run Fable once by
 # hand after installing), and again if it closes mid-batch.
+#   sh route.sh auto [runs]
+#       tour auto 3, then run auto <runs, 6> x4:vcpucore=1 all:vcpucore=0.
+#   sh route.sh start <command ...> / watch / stop
+#       Any of these detached from adb (a cable drop doesn't stop it),
+#       its output in console.txt; watch follows it (again after a drop).
 #   sh route.sh report <batch dir>
 #
 # Output: /sdcard/hakux_diag/routes/<name>.txt (the route) and
@@ -36,6 +41,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 TAGS="hakuX-hle-hitch:V hakuX-native:V hakuX-native-mods:V hakuX-app:V hakuX-native-usb:V
   hakuX-hle-pipe:V hakuX-hle:V hakuX-hle-prof:V hakuX-apu:V hakuX-native-watch:V hakuX-native-perf:V"
 
+[ -n "$HAKUX_PIDFILE" ] && echo $$ > "$HAKUX_PIDFILE"   # started detached (route.sh start)
 say() { echo "[route] $*"; }
 die() { echo "[route] error: $*" >&2; restore; exit 1; }
 
@@ -55,7 +61,7 @@ restore() {
   [ -n "$STAYON" ] && settings put global stay_on_while_plugged_in "$STAYON" 2>/dev/null
   stop_capture
 }
-trap 'say "stopped"; restore; exit 130' INT TERM
+trap 'say "stopped"; restore; exit 130' INT TERM HUP
 
 check_name() {
   case "$1" in
@@ -295,10 +301,45 @@ cmd_run() {
   sh "$HERE/route_report.sh" "$BATCH"
 }
 
+# The tour and a batch over it, X4 pinning on and off in turn.
+cmd_auto() {
+  cmd_tour auto 3
+  cmd_run auto "${1:-6}" x4:vcpucore=1 all:vcpucore=0
+}
+
+# Detached from adb (a cable drop doesn't stop it): the output in
+# $OUT/console.txt, followed by watch.
+cmd_start() {
+  mkdir -p "$OUT"
+  if [ -f "$OUT/route.pid" ] && kill -0 "$(cat "$OUT/route.pid")" 2>/dev/null; then
+    die "a batch is already running (pid $(cat "$OUT/route.pid")): route watch, or route stop"
+  fi
+  : > "$OUT/console.txt"; rm -f "$OUT/route.pid"
+  HAKUX_PIDFILE=$OUT/route.pid setsid nohup sh "$0" "$@" > "$OUT/console.txt" 2>&1 < /dev/null &
+  w=0; while [ ! -s "$OUT/route.pid" ] && [ $w -lt 10 ]; do sleep 1; w=$((w + 1)); done
+}
+
+cmd_watch() {
+  [ -f "$OUT/console.txt" ] || die "nothing started"
+  tail -n +1 -f "$OUT/console.txt" &
+  tp=$!
+  while [ -f "$OUT/route.pid" ] && kill -0 "$(cat "$OUT/route.pid")" 2>/dev/null; do sleep 2; done
+  sleep 1; kill $tp 2>/dev/null
+  echo "[route] finished"
+}
+
+cmd_stop() {
+  [ -f "$OUT/route.pid" ] && kill -TERM "$(cat "$OUT/route.pid")" 2>/dev/null && say "stopping" || say "nothing running"
+}
+
 case "$1" in
+  auto) shift; cmd_auto "$@";;
+  start) shift; cmd_start "$@";;
+  watch) cmd_watch;;
+  stop) cmd_stop;;
   tour) shift; cmd_tour "$@";;
   record) shift; cmd_record "$@";;
   run) shift; cmd_run "$@";;
   report) shift; sh "$HERE/route_report.sh" "$@";;
-  *) sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
+  *) sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
 esac

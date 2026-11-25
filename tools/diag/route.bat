@@ -7,7 +7,10 @@ rem                          X4 pinning on and off in turn (6 runs by default)
 rem   route tour bower 3     the hands-off route alone (3 minutes)
 rem   route run bower 6 x4:vcpucore=1 all:vcpucore=0
 rem   route record bower     a route you play yourself
+rem   route watch            follows a batch again (after the cable dropped)
+rem   route stop             stops a batch
 rem   route pull             copies /sdcard/hakux_diag/routes to .\routes
+rem A batch runs on the phone by itself: a cable drop doesn't stop it.
 setlocal
 set "HERE=%~dp0"
 set "ADB=adb"
@@ -18,15 +21,19 @@ if /i "%1"=="pull" goto pull
 if /i "%1"=="install" goto install
 "%ADB%" shell mkdir -p /data/local/tmp/hakux
 "%ADB%" push "%HERE%route.sh" "%HERE%route_report.sh" "%HERE%route_trace.pbtx" /data/local/tmp/hakux/ >nul || exit /b 1
-if /i "%1"=="auto" goto auto
-"%ADB%" shell -t sh /data/local/tmp/hakux/route.sh %*
-goto pull
-
-:auto
-set "RUNS=%2"
-if "%RUNS%"=="" set "RUNS=6"
-"%ADB%" shell sh /data/local/tmp/hakux/route.sh tour auto 3 || exit /b 1
-"%ADB%" shell -t sh /data/local/tmp/hakux/route.sh run auto %RUNS% x4:vcpucore=1 all:vcpucore=0
+if /i "%1"=="watch" goto watch
+if /i "%1"=="stop" (
+  "%ADB%" shell sh /data/local/tmp/hakux/route.sh stop
+  goto :eof
+)
+if /i "%1"=="report" (
+  "%ADB%" shell sh /data/local/tmp/hakux/route.sh %*
+  goto pull
+)
+"%ADB%" shell sh /data/local/tmp/hakux/route.sh start %* || exit /b 1
+:watch
+echo (following the phone; Ctrl+C or a cable drop leaves it running: route watch)
+"%ADB%" shell sh /data/local/tmp/hakux/route.sh watch
 goto pull
 
 :install

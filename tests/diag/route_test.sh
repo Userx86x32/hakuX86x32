@@ -103,4 +103,12 @@ check '[ "$(grep -c "^0" "$B/summary.csv")" = 3 ]'
 check 'grep -q "^01-x4,x4,3.0,90,30.0,1," "$B/summary.csv"'
 check 'grep -q "vCPU starved # ms" "$B/report.txt"'
 check '[ "$(cat "$M/props/debug.hakux.env")" = NC_TRACE_X=1 ]'
+echo "== detached: start auto 2, then watch"
+rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
+sh "$ROOT/tools/diag/route.sh" start auto 2
+sh "$ROOT/tools/diag/route.sh" watch > "$M/watch.log" 2>&1
+tail -n 4 "$M/watch.log"
+check 'grep -q "batch done" "$M/watch.log"'
+check '[ "$(ls -d "$M"/out/auto-2*/0* | wc -l)" = 2 ]'
+check 'grep -q "^\[route\] finished" "$M/watch.log"'
 exit $fail
