@@ -34,7 +34,7 @@ set "REPO=https://github.com/Userx86x32/hakuX86x32.git"
 set "RES=%HERE%results-repo"
 if /i "%1"=="upload" set "UPLOAD_AFTER=1"
 set "ADB=adb"
-set "APK_URL=https://github.com/Userx86x32/hakuX86x32/releases/download/build-claude-vibrant-cerf-lmdbik-13/hakuX-debug-claude-vibrant-cerf-lmdbik-13-1df9d50-sd865up.apk"
+set "APK_URL=https://github.com/Userx86x32/hakuX86x32/releases/download/build-claude-vibrant-cerf-lmdbik-14/hakuX-debug-claude-vibrant-cerf-lmdbik-14-e6ba66e-sd865up.apk"
 where adb >nul 2>nul || if exist "%HERE%platform-tools\adb.exe" (set "ADB=%HERE%platform-tools\adb.exe") else if exist "%HERE%adb.exe" (set "ADB=%HERE%adb.exe") else if exist "C:\hakuX-tests\platform-tools\adb.exe" (set "ADB=C:\hakuX-tests\platform-tools\adb.exe") else if exist "C:\hakuX-tests\adb.exe" (set "ADB=C:\hakuX-tests\adb.exe") else (echo adb not found: put this file next to adb.exe or platform-tools & exit /b 1)
 "%ADB%" get-state >nul 2>nul || (
   if /i "%1"=="upload" goto upload
