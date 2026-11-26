@@ -131,6 +131,10 @@ jobs:
             echo "::error::DEBUG_KEYSTORE_B64 holds another key (certificate SHA-256 $got, expected $DEBUG_CERT_SHA256)."
             exit 1
           fi
+          # named to the build (android/app/build.gradle.kts): the default
+          # debug keystore wasn't the one it signed with
+          cp ~/.android/debug.keystore "$RUNNER_TEMP/debug.keystore"
+          echo "HAKUX_DEBUG_KEYSTORE=$RUNNER_TEMP/debug.keystore" >> "$GITHUB_ENV"
           echo "Signing with the repository's debug key (certificate SHA-256 $got)."
 
       - name: APK
@@ -161,10 +165,10 @@ jobs:
           cp "$src" "$name"
           # signed with the debug key (APK Signature Scheme v2/v3: apksigner)
           signer="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner"
-          # every signer's certificate ("Signer #1 ..." or, with v3,
-          # "Signer (minSdkVersion=...) ...") must be the debug key's
+          # every signer's certificate ("V2 Signer: certificate SHA-256
+          # digest: ...", "Signer #1 ...") must be the debug key's
           out=$("$signer" verify --print-certs "$name")
-          got=$(echo "$out" | sed -n 's/^Signer.* certificate SHA-256 digest: //p' | tr 'a-f' 'A-F' | sort -u)
+          got=$(echo "$out" | sed -n 's/^.*certificate SHA-256 digest: //p' | tr 'a-f' 'A-F' | sort -u)
           if [ "$got" != "$DEBUG_CERT_SHA256" ]; then
             echo "$out"
             echo "::error::$name is signed with certificate SHA-256 '$got', not the debug key's $DEBUG_CERT_SHA256."

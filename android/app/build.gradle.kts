@@ -44,6 +44,18 @@ android {
   }
 
   signingConfigs {
+    // CI (.github/workflows/build-apk.yml): debug builds signed with the
+    // repository's debug key (HAKUX_DEBUG_KEYSTORE, from DEBUG_KEYSTORE_B64),
+    // named here: the default debug keystore wasn't the one the build used,
+    // and every release got its own key. Unset (a local build): the default.
+    System.getenv("HAKUX_DEBUG_KEYSTORE")?.takeIf { it.isNotBlank() }?.let { ks ->
+      getByName("debug") {
+        storeFile = file(ks)
+        storePassword = "android"
+        keyAlias = "androiddebugkey"
+        keyPassword = "android"
+      }
+    }
     if (hasReleaseKeystore) {
       create("release") {
         storeFile = file(keystoreProperties.getProperty("storeFile"))
