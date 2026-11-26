@@ -15,9 +15,8 @@
  * them nothing happens. debug.hakux.adpf 0 turns the hints off (and on again
  * with 1), read now and then.
  *
- * The vCPU's thread also runs on the fastest cores (the highest
- * cpuinfo_max_freq: the prime core); debug.hakux.vcpucore 0 lets it run on
- * every core again.
+ * debug.hakux.vcpucore 1 puts the vCPU's thread on the fastest cores (the
+ * highest cpuinfo_max_freq: the prime core); unset or 0, every core.
  */
 #ifndef NATIVE_CORE_PERFHINT_H
 #define NATIVE_CORE_PERFHINT_H
