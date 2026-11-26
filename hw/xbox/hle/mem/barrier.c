@@ -629,22 +629,24 @@ void hle_barrier_guard_stats(uint64_t *neighbours, uint64_t *hot)
 #define RPT_PENDING 256
 #define RPT_WAIT_NS 30000000ll
 
-/* debug: debug.hakux.visgate_us, the most a read waits for its reports (us;
- * unset: RPT_WAIT_NS), read every 64 waits. Past it the read takes what the
- * page holds: the test's result from before, on a title that reads its
- * tests a frame late (Fable: whole seconds of a Great Wood route waited,
- * the guest taking no interrupt meanwhile, its vblank and flip late). 0
- * doesn't wait. */
+/* The most a read waits for its reports: RPT_WAIT_DEFAULT_NS, or
+ * debug.hakux.visgate_us (us, 0-30000; 30000 is the old 30 ms), read every
+ * 64 waits. Past it the read takes what the page holds: the test's result
+ * from before, on a title that reads its tests a frame late. Fable waited
+ * whole seconds of a Great Wood route at 30 ms, the guest taking no
+ * interrupt meanwhile (its vblank and flip late): 50 fps and 422 stutters a
+ * minute; at 1 ms, 59 fps and 31, nothing seen drawn wrong (as with 0). */
+#define RPT_WAIT_DEFAULT_NS 1000000ll
 static int64_t rpt_wait_ns(void)
 {
-    static int64_t ns = RPT_WAIT_NS;
+    static int64_t ns = RPT_WAIT_DEFAULT_NS;
     static unsigned n;
     if (n++ % 64 == 0) {
         char v[PROP_VALUE_MAX] = "";
-        int64_t want = RPT_WAIT_NS;
+        int64_t want = RPT_WAIT_DEFAULT_NS;
         if (hle_prop_get("debug.hakux.visgate_us", v) > 0 && v[0]) {
             const long long us = strtoll(v, NULL, 10);
-            want = us < 0 ? RPT_WAIT_NS : (us > 30000 ? 30000 : us) * 1000ll;
+            want = us < 0 ? RPT_WAIT_DEFAULT_NS : (us > 30000 ? 30000 : us) * 1000ll;
         }
         if (want != ns) {
             hle_log("hakuX-hle-pb", "report gate: a read waits at most %.1f ms (debug.hakux.visgate_us)",
