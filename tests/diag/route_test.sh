@@ -231,6 +231,37 @@ pre=0; sh "$ROOT/tools/diag/route.sh" preflight > "$M/pre2.log" 2>&1 || pre=$?
 rm -f "$M/old_apk"
 check '[ $pre = 1 ] && grep -q "FAILED: no \"(waits for a savestate.s load)\"" "$M/pre2.log" && grep -q "^preflight=failed" "$M/out/preflight/run.txt"'
 
+echo "== suite: scenes= and an env= variant (the visibility gate off), vcpucore=0 in both; vcpucore put back"
+: > "$M/setprops"; rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
+setprop debug.hakux.vcpucore 7                 # what it was before the batch
+flip=$(cat "$M/out/.probe_flip")
+sh "$ROOT/tools/diag/route.sh" suite scenes=bower:1 base:vcpucore=0 nogate:vcpucore=0,env=HAKUX_HLE_PB_VISGATE=0 > "$M/gate.log" 2>&1 ||
+  { cat "$M/gate.log"; exit 1; }
+echo "$flip" > "$M/out/.probe_flip"
+B=$(ls -d "$M"/out/suite-2* | tail -n 1)
+check 'grep -q "^scenes=bower:1$" "$B/batch.txt" && grep -q "batch: about .* min (scenes bower:1," "$M/gate.log"'
+check 'grep -q "^debug.hakux.env2=NC_PAD_STATE=1;NC_IRQ_SCHED=1;HAKUX_HLE_PB_VISGATE=0$" "$B/02-bower-nogate/run.txt"'
+check 'grep -q "^debug.hakux.env2=NC_PAD_STATE=1;NC_IRQ_SCHED=1$" "$B/01-bower-base/run.txt" && grep -q "^debug.hakux.vcpucore=0$" "$B/01-bower-base/run.txt"'
+check '! grep -q "^failed=" "$B"/0*/run.txt'
+check '[ "$(cat "$M/props/debug.hakux.vcpucore")" = 7 ] && grep -q "put back:.*vcpucore=.7." "$M/gate.log"'
+
+echo "== a batch killed (Auto Blocker) left vcpucore=0: clean, and the next batch, put back what was before"
+printf 'debug.hakux.env=NC_TRACE_X=1\ndebug.hakux.env2=\ndebug.hakux.vcpucore=\ndebug.hakux.adpf=\n' > "$M/hakux_route_props"
+setprop debug.hakux.vcpucore 0
+sh "$ROOT/tools/diag/route.sh" clean > /dev/null 2>&1
+check '[ -z "$(cat "$M/props/debug.hakux.vcpucore")" ] && [ ! -f "$M/hakux_route_props" ]'
+printf 'debug.hakux.env=NC_TRACE_X=1\ndebug.hakux.env2=\ndebug.hakux.vcpucore=\ndebug.hakux.adpf=\n' > "$M/hakux_route_props"
+setprop debug.hakux.vcpucore 0
+rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
+flip=$(cat "$M/out/.probe_flip")
+sh "$ROOT/tools/diag/route.sh" suite scenes=bower:1 runs=1 x4:vcpucore=1 > "$M/killed.log" 2>&1 || { cat "$M/killed.log"; exit 1; }
+echo "$flip" > "$M/out/.probe_flip"
+check 'grep -q "a cut-off batch.s settings put back first" "$M/killed.log" && [ -z "$(cat "$M/props/debug.hakux.vcpucore")" ]'
+
+echo "== a scene that must be recorded (not in TOUR_SCENES) and has no route: the batch doesn't start"
+sh "$ROOT/tools/diag/route.sh" suite scenes=lookout:1 base > "$M/look.log" 2>&1 && echo "(it started)"
+check 'grep -q "error: scene lookout: no route recorded .*route record lookout 1" "$M/look.log" && [ ! -f "$M/out/lookout.txt" ]'
+
 echo "== suite: a cold start with hints off (A) against the default (B); the probe swaps to simpleperf"
 : > "$M/setprops"; rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
 echo old > "$A/files/native/hle/cache.bin"

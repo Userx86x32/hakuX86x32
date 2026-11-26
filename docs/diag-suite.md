@@ -98,7 +98,10 @@ rose" lines: count, by first reason: an ISR running / interrupts off (IF 0)
 the guest CPU's thread's "ran Y ms of it" avg and max; host CPU wait avg);
 the `hakuX-hle-pb` statistics lines (count, kicks and words summed, flips
 over the replay). `report.txt` shows them in "Late interrupts" and
-"Decoder" (with `hle-pb`'s run and wait time beside the spin).
+"Decoder" (with `hle-pb`'s run and wait time beside the spin). `report.txt` also lists every presentation
+interval change the watch (`0x862494`) saw during the replays, per scene
+(Lookout Point first), with its time into the replay; a change to 2 or
+`0x80000002` is marked: Fable itself asked for 30 fps there.
 
 ## 2. Probe runs (one per scene per batch, not counted in A/B)
 
@@ -159,6 +162,27 @@ instead (any build), and put back at the end.
 | V8 | `route suite x4:vcpucore=1 all:vcpucore=0` (`route auto`), with `RUNS=10` | X4 placement (batch 1: -18% vCPU work, stutters within noise) |
 | V9 (v4) | `route suite spin200:pbspin=200 spin0:pbspin=0`, later `spin200:pbspin=200 spin50:pbspin=50` | the decoder's spin before sleeping (`debug.hakux.pbspin`, us; 200 is the default) keeps a fast core busy beside the vCPU (`hle-pb` run time). Read within a second; reset to `""` at the end. Each run checks the decoder's `decoder spin before sleeping: N us` line (logged only when it isn't 200: no line is 200) |
 | V10 (v4) | `route suite base1 base2` | no variant: the noise between two identical halves, with the new logging |
+| V11 | `route suite scenes=lookout:3,wood:2 base:vcpucore=0 nogate:vcpucore=0,env=HAKUX_HLE_PB_VISGATE=0` | the decoder's visibility (report) gate: off in B. `env=` goes into `debug.hakux.env2` after `NC_PAD_STATE=1;NC_IRQ_SCHED=1` (read at game start) and is checked in the game's `debug.hakux.env:` lines |
+| V12 | `route suite scenes=lookout:3 base1:vcpucore=0 base2:vcpucore=0` | Lookout Point's noise between two identical halves |
+
+**Lookout Point** (slot 3): a savestate on the path from Bowerstone South
+towards Lookout Point, just before the uphill slope with the trees (`route
+save 3` there), and a route recorded through the slope, 45-60 s (`route
+record lookout 3`; a scene outside `TOUR_SCENES`, so no hands-off tour is
+made for it: a batch with it and no recorded route doesn't start). Three
+scenes take about 34 minutes (bower and wood 75 s routes, lookout ~55 s,
+each 6 runs + a probe, ~30 s a run for the load and cool-down), over Auto
+Blocker's 30, so these batches run Lookout Point and Great Wood only
+(`scenes=` before the variants; `runs=N` likewise). The runner prints its
+estimate at the start.
+
+**Properties put back.** At the end of a batch the runner sets back the
+properties it saved at the start (`debug.hakux.vcpucore`, `adpf`, the
+variants' others; empty if they were unset) and prints them ("put back:").
+A batch Auto Blocker killed couldn't: its saved values are kept, and
+`route clean` (which the queue runs before each try) or the next batch puts
+them back first, so the variant's value (`vcpucore=0` after the X4 batch)
+isn't taken for the phone's own.
 
 **v4 queue** (`queue.txt` made by `route queue`; delete an old `queue.txt`
 and `queue.done` to get it): V9 (200 vs 0), V8 (`vcpucore` 1 vs 0, 6 runs),

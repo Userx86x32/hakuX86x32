@@ -57,7 +57,8 @@ for R in "$B"/*/; do
       if (!(p in wfirst)) { wfirst[p] = val; next }
       if (started && !done && p == spid) {
         pich++; pivals = pivals (pivals == "" ? wfirst[p] : "") ">" val
-        print run "\t" variant "\t" $2 "\t" word(substr(wv[5], 1, 8)) "\t" val "\t" wv[8] >> watchf
+        rt = secs($2) - t0; if (rt < 0) rt += 86400      # seconds into the replay
+        print run "\t" variant "\t" $2 "\t" word(substr(wv[5], 1, 8)) "\t" val "\t" wv[8] "\t" sprintf("%.1f", rt) >> watchf
       }
       next
     }
@@ -278,6 +279,8 @@ for R in "$B"/*/; do
 done
 
 # the variants side by side, then each one's commonest stutter causes
+waddr_all=$(sed -n 's/^debug.hakux.watch=//p' "$B"/*/run.txt 2>/dev/null | sort -u | tr '\n' ' ' | sed 's/ $//')
+waddr_all=${waddr_all:-0x862494}
 {
   echo "hakuX route report: $B"
   echo
@@ -381,9 +384,25 @@ done
         printf "  %-24s vblank answer %s avg %s max ms, %s over 2 ms, %s over 8 ms, %s unanswered; flips %s avg %s max ms after; interval %s, %s changes (%s)\n",
           "", $18, $19, $20, $21, $22, $23, $24, $25, $26, $27 }' "$SUM"
   echo
-  echo "Presentation interval changes during the replays (run, time, from > to, at vblank):"
+  # every change of the watched presentation interval (0x862494) during the
+  # replays, with its time into the replay, per scene, Lookout Point first;
+  # 2 or 0x80000002: Fable itself asked for 30 fps there
+  echo "Presentation interval changes during the replays (the watch, $waddr_all; per scene, Lookout Point first):"
   if [ -s "$B/watch.txt" ]; then
-    awk -F'\t' '{ printf "  %-24s %s  %s > %s  (vblank %s)\n", $1, $3, $4, $5, $6 }' "$B/watch.txt"
+    awk -F'\t' '
+      { sc = $2; sub(/\/.*/, "", sc); if (!(sc in seen)) { seen[sc] = 1; order[++ns] = sc }
+        line[sc, ++n[sc]] = $0
+        if ($5 == "2" || $5 == "0x80000002") { thirty[sc]++; runs30[sc, $1] = 1 } }
+      function show(sc,  i, f, note) {
+        printf "  %s (%s): %d changes, %d to 30 fps\n", (sc == "lookout" ? "Lookout Point" : sc), sc, n[sc], thirty[sc]
+        for (i = 1; i <= n[sc]; i++) {
+          split(line[sc, i], f, "\t")
+          note = (f[5] == "2" || f[5] == "0x80000002") ? "   <- Fable asked for 30 fps" : ""
+          printf "    %-28s +%6s s  %s > %s  (%s, vblank %s)%s\n", f[1], f[7], f[4], f[5], f[3], f[6], note
+        }
+      }
+      END { if ("lookout" in seen) show("lookout")
+            for (j = 1; j <= ns; j++) if (order[j] != "lookout") show(order[j]) }' "$B/watch.txt"
   else
     echo "  none"
   fi

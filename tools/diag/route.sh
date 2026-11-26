@@ -7,12 +7,13 @@
 # drives it from the PC (it pushes this, route_report.sh, route_trace.pbtx
 # and route.cfg, starts it detached, follows it, pulls and uploads).
 #
-#   suite <variant A> [variant B]
+#   suite [scenes=<route:slot,...>] [runs=N] <variant A> [variant B]
 #       The 30-minute batch: for each scene (route.cfg SCENES, a route name
 #       and its savestate slot: bower:1 wood:2), RUNS measurement runs
 #       alternating A and B, then one probe run on A (Perfetto in the first
 #       scene and simpleperf in the second, the other way round next batch).
-#       A scene whose slot has no savestate is skipped.
+#       A scene whose slot has no savestate is skipped. scenes= and runs=
+#       override route.cfg's SCENES and RUNS for this batch.
 #   auto
 #       suite x4:vcpucore=1 all:vcpucore=0.
 #   run <route> [runs] [variant ...]
@@ -20,9 +21,9 @@
 #       variants, then the probes in PROBES (perfetto simpleperf prof).
 #   tour <route> [seconds]
 #       A route with no one playing (sticks only), ROUTE_SECS long by default.
-#   record <route>
-#       A route you play: loads the slot and records your controller until
-#       you open hakuX's menu (or press Home).
+#   record <route> [slot]
+#       A route you play: loads the slot (SLOT by default) and records your
+#       controller until you open hakuX's menu (or press Home).
 #   save <slot> / load <slot>
 #       A savestate of the running game to that slot, or loaded from it.
 #   clean
@@ -49,6 +50,8 @@
 #       the core applied (its hakuX-native-mods lines) and fails otherwise;
 #       a variant failing twice stops the batch.
 #   cold=1: the shader and pipeline caches cleared before the run
+#   env=NAME=value: in debug.hakux.env2 after NC_PAD_STATE=1;NC_IRQ_SCHED=1
+#       (read at game start; checked in the game's debug.hakux.env: lines)
 #   pbspin=<us>: the decoder's spin before sleeping (debug.hakux.pbspin, v4;
 #       read within a second; unset: 200), checked against its "decoder spin
 #       before sleeping" line at the run's end (none: 200)
@@ -68,7 +71,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 SCENES="bower:1 wood:2"     # route:slot, in order
 RUNS=6                      # measurement runs per scene (A B A B ...)
 ROUTE_SECS=75               # a tour's length
-SLOT=1                      # run's slot
+SLOT=1                      # run's slot (and record's, unless given)
+TOUR_SCENES="bower wood"    # scenes whose route may be a hands-off tour, made when missing;
+                            # any other (lookout) must be recorded: route record <name> <slot>
 PROBES=perfetto             # run's probe runs (perfetto simpleperf prof; "" none)
 COOL_C=45                   # cool down until the hottest gpuss zone is under this
 COOL_MAX=10                 # ... for at most this many seconds (the game runs on meanwhile, so
@@ -104,6 +109,14 @@ SAVED_PROPS="debug.hakux.env debug.hakux.env2 debug.hakux.vcpucore debug.hakux.a
 RUNNER_PROPS="debug.hakux.opts debug.hakux.perf debug.hakux.perfsec"
 without_pad() { echo "$1" | tr ';' '\n' | grep -v -e '^NC_PAD_' -e '^NC_IRQ_SCHED=' | tr '\n' ';' | sed 's/;*$//'; }
 save_props() {
+  # a batch killed before it could put things back (Auto Blocker ends it
+  # with SIGKILL) left its saved values: those are from before it, and what
+  # is set now is its variants' (vcpucore=0 after the X4 batch). Put back
+  # first, so they aren't saved as the "before" values.
+  if [ -f $TMPD/hakux_route_props ]; then
+    say "a cut-off batch's settings put back first"
+    restore
+  fi
   : > $TMPD/hakux_route_props
   for p in $SAVED_PROPS $VARIANT_PROPS; do
     v=$(getprop $p)
@@ -123,7 +136,12 @@ save_props() {
 saved_value() { sed -n "s/^$1=//p" $TMPD/hakux_route_props; }
 restore() {
   [ -f $TMPD/hakux_route_props ] || return 0
-  while IFS== read -r p v; do setprop "$p" "$v"; done < $TMPD/hakux_route_props
+  pb=
+  while IFS== read -r p v; do
+    setprop "$p" "$v"
+    case "$p" in debug.hakux.env|debug.hakux.env2) ;; *) pb="$pb ${p#debug.hakux.}='$v'";; esac
+  done < $TMPD/hakux_route_props
+  say "put back:$pb"
   setprop debug.hakux.state ''          # not put back: a new value would load a state
   rm -f $TMPD/hakux_route_props
   put_back_mod_choices && rm -f $TMPD/hakux_route_modchoices
@@ -363,7 +381,7 @@ variant_props() {
     case "$v" in *:*) ;; *) continue;; esac       # a label alone: nothing set
     echo "${v#*:}" | tr ',' '\n' | while IFS== read -r p val; do
       case "$p" in
-        ''|scale|asyncpipe|prebuild|driver|mod|cold) ;;
+        ''|scale|asyncpipe|prebuild|driver|mod|cold|env) ;;
         debug.*) echo "$p";;
         *) echo "debug.hakux.$p";;
       esac
@@ -437,12 +455,13 @@ set_variant() {
   for p in $VARIANT_PROPS; do setprop "$p" "$(saved_value "$p")"; done
   [ -n "$MOD_BATCH" ] && put_back_mod_choices
   game=$(slot_game "$2")
-  opts=
+  opts= envx=
   for kv in $(echo "${1#*:}" | tr ',' ' '); do
     [ "$kv" = "$1" ] && break
     p=${kv%%=*}; v=${kv#*=}
     case "$p" in
       scale|asyncpipe|prebuild) opts="$opts $p=$v";;
+      env) case "$v" in [A-Za-z_]*=*) envx="$envx;$v";; *) die "variant $1: env=NAME=value (got '$v')";; esac;;
       driver) [ "$v" = system ] && opts="$opts vkdriver=none";;
       mod) [ -n "$game" ] || die "mod $v: no savestate in slot $2 (its folder names the game)"
            [ "$v" = none ] || mods_with_patches | grep -qx "$v" ||
@@ -458,6 +477,12 @@ set_variant() {
       *) setprop "debug.hakux.$p" "$v"; echo "debug.hakux.$p=$v";;
     esac
   done
+  # debug.hakux.env2: the replay's and NC_IRQ_SCHED, then the variant's env=
+  e2="$(run_env2)$envx"
+  [ ${#e2} -le 91 ] || die "variant $1: debug.hakux.env2 would be too long (91 characters): $e2"
+  setprop debug.hakux.env2 "$e2"
+  echo "debug.hakux.env2=$e2"
+  echo "env_variant=${envx#;}"
   opts=${opts# }
   [ ${#opts} -le 91 ] || die "variant $1: its options are too long for debug.hakux.opts (91 characters)"
   setprop debug.hakux.opts "$opts"
@@ -524,6 +549,10 @@ check_run() {
   if ! grep "hakuX-native-usb( *$spid): pad script: " "$rd/logcat.txt" | grep -q "(waits for a savestate's load)"; then
     bad="${bad:+$bad; }the replay didn't wait for the savestate's load (no \"(waits for a savestate's load)\": this APK lacks NC_PAD_STATE)"
   fi
+  for e in $(sed -n 's/^env_variant=//p' "$rd/run.txt" | tr ';' ' '); do
+    grep -qF "debug.hakux.env: $e" "$rd/logcat.txt" ||
+      bad="${bad:+$bad; }$e (the variant's env=) not in the game's environment"
+  done
   if [ "$IRQ_SCHED" = 1 ] && ! grep -q "hakuX-app( *$spid): debug.hakux.env: NC_IRQ_SCHED=1" "$rd/logcat.txt"; then
     bad="${bad:+$bad; }NC_IRQ_SCHED=1 not in the game's environment (debug.hakux.env2)"
   fi
@@ -625,11 +654,9 @@ one_run() {
   # the guest word watch, set again each run (a restart clears properties;
   # each new game process reads it again); left set afterwards
   setprop debug.hakux.watch "$WATCH"
-  setprop debug.hakux.env2 "$(run_env2)"
   {
     echo "variant=${v%%:*}"; echo "kind=$kind"; echo "scene=$scene"; echo "slot=$slot"
     echo "debug.hakux.watch=$WATCH"
-    echo "debug.hakux.env2=$(run_env2)"
     set_variant "$v" "$slot"
     echo "start=$(date)"; echo "start_gpuss_C=$(gpuss_c)"
     echo "battery_dC=$(cat /sys/class/power_supply/battery/temp 2>/dev/null)"
@@ -685,7 +712,7 @@ one_run() {
 }
 
 # Steps in a route file (0: none, or an empty file left by an old runner).
-route_steps() { grep -c '^[0-9]' "$OUT/$1.txt" 2>/dev/null || true; }
+route_steps() { n=$(grep -c '^[0-9]' "$OUT/$1.txt" 2>/dev/null); echo "${n:-0}"; }   # (no file: 0)
 
 # Readies a scene: its route (a tour if there's none, or it has no steps), in the app.
 ready_scene() {
@@ -731,6 +758,9 @@ cmd_tour() {
 
 cmd_record() {
   name=$1; check_name "$name"
+  [ -n "$2" ] && SLOT=$2
+  case "$SLOT" in [1-9]) ;; *) die "record: a slot from 1 to 9 (got '$SLOT')";; esac
+  slot_exists "$SLOT" || die "slot $SLOT holds no savestate: get to the spot, then route save $SLOT"
   mkdir -p "$OUT" || die "can't write $OUT"
   run-as $PKG mkdir -p "$APPDIR" || die "run-as $PKG failed (a debug build is needed)"
   save_props
@@ -792,6 +822,20 @@ cmd_run() {
 
 RUNFAILS=                   # the variants whose run failed its check (one each is allowed)
 
+# The batch's length, roughly: per scene with a savestate, RUNS + 1 runs of
+# its route + 30 s (the savestate's load, the cool-down); over 30 minutes,
+# Auto Blocker may cut it (say so: SCENES or RUNS can be smaller).
+batch_estimate() {
+  est=0
+  for sc in $SCENES; do
+    slot_exists "${sc#*:}" || continue
+    rs=$(route_secs "${sc%%:*}" 2>/dev/null); [ "${rs:-0}" -gt 0 ] || rs=$ROUTE_SECS
+    est=$((est + (rs + 30) * (RUNS + 1)))
+  done
+  say "batch: about $((est / 60)) min (scenes $SCENES, $RUNS runs + a probe each)"
+  [ $est -le 1800 ] || say "batch: over 30 minutes: Auto Blocker may cut it (resumed after); fewer scenes (scenes=...) or runs (runs=N) fit"
+}
+
 # Before a queue: one load of the first scene with a savestate, checked as
 # a run is (the replay waits for the savestate's load; NC_IRQ_SCHED=1 set
 # in debug.hakux.env2 and in the game's environment), and the APK named.
@@ -848,7 +892,30 @@ cmd_preflight() {
 # The 30-minute batch (docs/diag-suite.md): per scene, RUNS measurement runs
 # A B A B ..., then one probe run on A; the probes swap scenes each batch.
 cmd_suite() {
+  suite_args="$*"                   # (the resume key: scenes= and runs= included)
+  # scenes=<route:slot,...> and runs=<N> first: this batch's, over route.cfg's
+  while :; do
+    case "$1" in
+      scenes=*) SCENES=$(echo "${1#scenes=}" | tr ',' ' '); shift;;
+      runs=*) RUNS=${1#runs=}; shift
+              case "$RUNS" in ''|*[!0-9]*) die "runs=N: a number (got '$RUNS')";; esac;;
+      *) break;;
+    esac
+  done
   [ $# -ge 1 ] || die "suite needs a variant (A), and usually a second (B)"
+  # every scene with a savestate has its route before anything starts: a
+  # scene not in TOUR_SCENES needs one recorded (route record <name> <slot>)
+  for sc in $SCENES; do
+    check_name "${sc%%:*}"
+    slot_exists "${sc#*:}" || continue
+    if [ "$(route_steps "${sc%%:*}")" -lt 1 ]; then
+      case " $TOUR_SCENES " in
+        *" ${sc%%:*} "*) ;;
+        *) die "scene ${sc%%:*}: no route recorded ($OUT/${sc%%:*}.txt): route record ${sc%%:*} ${sc#*:}";;
+      esac
+    fi
+  done
+  batch_estimate
   mkdir -p "$OUT" || die "can't write $OUT"
   VARIANT_PROPS=$(variant_props "$@")
   case " $* " in *[:,]mod=*) MOD_BATCH=1;; esac
@@ -858,7 +925,7 @@ cmd_suite() {
   # the same suite again after it was cut off (Auto Blocker, the cable): its
   # batch goes on, keeping the runs that finished (.suite_state: the
   # command, the batch's folder, its probe order)
-  key="$name $*" st=$OUT/.suite_state resumed=
+  key="$name $suite_args" st=$OUT/.suite_state resumed=
   if [ -f "$st" ]; then
     IFS='|' read -r skey sdir sflip < "$st"
     if [ "$skey" = "$key" ] && [ -d "$sdir" ] && [ ! -f "$sdir/report.txt" ]; then
@@ -964,12 +1031,14 @@ cmd_load() {
 }
 
 cmd_clean() {
+  # a cut-off batch's saved values (vcpucore, adpf, pbspin...) put back
+  restore
   setprop debug.hakux.env "$(without_pad "$(getprop debug.hakux.env)")"
   setprop debug.hakux.env2 "$(without_pad "$(getprop debug.hakux.env2)")"
   for p in debug.hakux.state $RUNNER_PROPS; do setprop "$p" ''; done
   put_back_mod_choices && rm -f $TMPD/hakux_route_modchoices
   say "cleared: the replay and recording (NC_PAD_ in debug.hakux.env, env2), state, opts, perf; mod choices put back"
-  say "(vcpucore, adpf and watch left as they are; restarting the phone clears them all)"
+  say "(vcpucore, adpf, pbspin: as before the cut-off batch, if one was; watch left set)"
 }
 
 # The last detached command: "running|<command>|", "done|<command>|" (its
@@ -1012,5 +1081,5 @@ case "$1" in
   report) shift; sh "$HERE/route_report.sh" "$@";;
   apkrecord) shift; cmd_apkrecord "$@";;
   preflight) cmd_preflight;;
-  *) sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
+  *) sed -n '2,66p' "$0" | sed 's/^# \{0,1\}//'; exit 2;;
 esac

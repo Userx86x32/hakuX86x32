@@ -14,11 +14,13 @@ rem                            route suite base sysdrv:driver=system
 rem                            route suite base x3:scale=3
 rem                            route suite spin200:pbspin=200 spin0:pbspin=0
 rem                            route suite base1 base2      (no variant: noise)
+rem                          scenes= and runs= first: this batch's scenes and runs, e.g.
+rem                            route suite scenes=lookout:3,wood:2 base nogate:env=HAKUX_HLE_PB_VISGATE=0
 rem   route auto             route suite x4:vcpucore=1 all:vcpucore=0
 rem   route tour bower 75    a hands-off route alone (75 seconds)
 rem   route run bower 6 x4:vcpucore=1 all:vcpucore=0   one scene (slot 1)
 rem Settings (scenes, runs, cool-down...): route.cfg next to this file, if any.
-rem   route record bower     a route you play yourself
+rem   route record bower     a route you play yourself (route record lookout 3: from slot 3)
 rem   route save 2           a savestate of the running game to slot 2 (get there first)
 rem   route load 2           loads slot 2
 rem   route clean            clears the runner's settings on the phone (after a cut-off batch)
@@ -237,11 +239,15 @@ rem queue.txt the first time: the suite's batches in the order docs/diag-suite.m
 > "%Q%" echo # route queue: one route command a line, run in order by "route queue".
 >> "%Q%" echo # Lines starting with # are skipped. Finished lines go to queue.done.
 >> "%Q%" echo # The charging test (V7) needs you to unplug the phone, so it isn't here.
-rem v4 (build-optimized-test-v4): the decoder's spin, the vCPU's cores, a noise reference
->> "%Q%" echo suite spin200:pbspin=200 spin0:pbspin=0
->> "%Q%" echo suite x4:vcpucore=1 all:vcpucore=0
->> "%Q%" echo suite base1 base2
->> "%Q%" echo suite spin200:pbspin=200 spin50:pbspin=50
+rem Lookout Point (slot 3, a recorded route) and Great Wood: three scenes
+rem don't fit in 30 minutes. vcpucore=0 set in every run.
+>> "%Q%" echo suite scenes=lookout:3,wood:2 base:vcpucore=0 nogate:vcpucore=0,env=HAKUX_HLE_PB_VISGATE=0
+>> "%Q%" echo suite scenes=lookout:3 base1:vcpucore=0 base2:vcpucore=0
+>> "%Q%" echo # not run yet (v4): remove the # to run them
+>> "%Q%" echo #suite spin200:pbspin=200 spin0:pbspin=0
+>> "%Q%" echo #suite x4:vcpucore=1 all:vcpucore=0
+>> "%Q%" echo #suite base1 base2
+>> "%Q%" echo #suite spin200:pbspin=200 spin50:pbspin=50
 exit /b 0
 
 rem ---- backup / restore of the app's own files (run-as: a debug build) ----
