@@ -1,6 +1,21 @@
 # route.cfg: settings for route.bat / route.sh. Copy this file to route.cfg
 # next to route.bat and change what you need; lines starting with # are off.
 #
+# The adapter: hakux (the default: hakuX, a route replayed from a savestate)
+# or generic (any app: started, APP_WAIT s, then APP_SECS s measured);
+# tools/diag/README.md. The settings below are the hakux adapter's but for
+# RUNS, COOL_C, COOL_MAX, PROBE_SECS, SLOT and PROBES (the core's).
+#ADAPTER=hakux
+#
+# The generic adapter (ADAPTER=generic):
+#APP_PKG=com.example.game
+#APP_WAIT=10
+#APP_SECS=60
+#APP_RESTART=1
+#APP_THREADS="main=@main render=RenderThread"
+#APP_LOG_TAGS=""
+#SCENES="app"
+#
 # Scenes for "route suite": route name and savestate slot, in order. A scene
 # whose slot has no savestate is skipped.
 #SCENES="bower:1 wood:2"

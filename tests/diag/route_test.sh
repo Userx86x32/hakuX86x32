@@ -27,6 +27,11 @@ fi
 if [ "$1" = debug.hakux.state ] && [ "${2%%:*}" = load ] && [ -f "$M/pid" ]; then
   # the first request comes too early (the game still booting): ignored
   [ -f "$M/booted" ] || { touch "$M/booted"; exit 0; }
+  # (resave_at N: the savestate saved again over slot 1 after the Nth load)
+  if [ -f "$M/resave_at" ]; then
+    n=$(( $(cat "$M/loads" 2>/dev/null || echo 0) + 1 )); echo $n > "$M/loads"
+    [ "$n" = "$(cat "$M/resave_at")" ] && echo "state, saved again" > "$M/data/com.rfandango.haku_x.debug/files/native/states/4D5300D1.1/slot1.hxs"
+  fi
   (
     sleep 1; echo $(( $(cat "$M/pid") + 1 )) > "$M/pid"
     env=$(cat "$M/props/debug.hakux.env")
@@ -328,3 +333,49 @@ echo "[route] error: couldn't copy the route into the app (0 of 0 lines)" > "$M/
 check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "failed|auto|" ]'
 echo "stop: not finished" > "$M/out/console.txt"
 check '[ "$(sh "$ROOT/tools/diag/route.sh" status)" = "stopped|auto|" ]'
+
+echo "== what a run starts from: the route's and the savestate's checksums; saved again mid-batch, its runs kept apart"
+check 'grep -q "^inputs=route:[0-9a-f]\{8\} state:[0-9a-f]\{8\}$" "$(ls -d "$M"/out/auto-2*)/01-bower-x4/run.txt" && grep -q "^state_sha256=[0-9a-f]\{64\}$" "$(ls -d "$M"/out/auto-2*)/01-bower-x4/run.txt"'
+check '! grep -q "^Inputs changed" "$(ls -d "$M"/out/auto-2*)/report.txt" && [ ! -e "$(ls -d "$M"/out/auto-2*)/inputs.txt" ]'
+rm -f "$M/pid" "$M/booted" "$M/loads"; : > "$M/logcat"; echo 1 > "$M/resave_at"
+flip=$(cat "$M/out/.probe_flip")
+sh "$ROOT/tools/diag/route.sh" suite scenes=bower:1 a b > "$M/resave.log" 2>&1 || { cat "$M/resave.log"; exit 1; }
+rm -f "$M/resave_at"; echo state > "$A/files/native/states/4D5300D1.1/slot1.hxs"; echo "$flip" > "$M/out/.probe_flip"
+B=$(ls -d "$M"/out/suite-2* | tail -n 1)
+check '[ "$(sed -n "s/^state_sha256=//p" "$B/01-bower-a/run.txt")" != "$(sed -n "s/^state_sha256=//p" "$B/02-bower-b/run.txt")" ]'
+check '[ "$(sed -n "s/^route_sha256=//p" "$B/01-bower-a/run.txt")" = "$(sed -n "s/^route_sha256=//p" "$B/02-bower-b/run.txt")" ]'
+check 'grep -q "scene bower: what this run starts from changed in the batch (route:.* state:.*, now route:.* state:.*): the report keeps its runs apart" "$M/resave.log"'
+check 'grep -q "^01-bower-a,bower#1/a," "$B/summary.csv" && grep -q "^02-bower-b,bower#2/b," "$B/summary.csv" && grep -q "^03-bower-probe-.*,bower#2/a/probe-" "$B/summary.csv"'
+check 'grep -q "^Inputs changed within the batch" "$B/report.txt" && grep -q "^  bower#1 .*state:.*(from 01-bower-a)$" "$B/report.txt" && grep -q "^  bower#2 .*(from 02-bower-b)$" "$B/report.txt"'
+check '[ "$(wc -l < "$B/inputs.txt")" = 2 ]'
+
+echo "== route.bat's backup: the remote command, split as cmd splits it and run as adb runs it"
+BAT=$ROOT/tools/diag/route.bat
+# cmd's %VAR% from the hakuX adapter's settings, then its arguments: spaces
+# outside double quotes split them, the quotes go
+batvar() { tr -d '\r' < "$ROOT/tools/diag/adapters/hakux.cmd" | sed -n "s/^set \"$1=\(.*\)\"$/\1/p"; }
+cmdargs() {
+  sed "s|%PKG%|$(batvar PKG)|g; s|%BACKUP_PATHS%|$(batvar BACKUP_PATHS)|g" | awk '{
+    n = 0; a = ""; q = 0; have = 0
+    for (i = 1; i <= length($0); i++) { ch = substr($0, i, 1)
+      if (ch == "\"") { q = !q; have = 1; continue }
+      if (ch == " " && !q) { if (have) { print a; n++ }; a = ""; have = 0; continue }
+      a = a ch; have = 1 }
+    if (have) print a }'
+}
+tr -d '\r' < "$BAT" | grep '^"%ADB%" exec-out "run-as %PKG% sh -c .tar -cf - ' > "$M/bk.line"
+cmdargs < "$M/bk.line" > "$M/bk.args"
+cat "$M/bk.args"
+check '[ "$(wc -l < "$M/bk.line")" = 1 ] && [ "$(sed -n 2p "$M/bk.args")" = exec-out ] && [ "$(sed -n 4p "$M/bk.args")" = ">" ]'
+# adb runs its one argument with the phone's shell (sh -c)
+sh -c "$(sed -n 3p "$M/bk.args")" > "$M/backup.tar" 2> "$M/backup.err"
+tar -tf "$M/backup.tar" > "$M/backup.list" 2>&1 || true
+check 'grep -qx "files/native/states/4D5300D1.1/slot1.hxs" "$M/backup.list" && grep -qx "files/mod_choices.json" "$M/backup.list"'
+check 'grep -qx "shared_prefs/x1box_prefs.xml" "$M/backup.list" && ! grep -q "gpu_driver\|Partition" "$M/backup.list" && [ ! -s "$M/backup.err" ]'
+# and back: route.bat's restore, the archive pushed to /data/local/tmp
+tr -d '\r' < "$BAT" | grep '^"%ADB%" shell "cat /data/local/tmp/hakux-backup.tar | run-as %PKG% tar -xf -"$' |
+  sed "s|/data/local/tmp/hakux-backup.tar|$M/backup.tar|" | cmdargs > "$M/rs.args"
+mv "$A/files/native/states" "$M/states.moved"; rm -f "$A/files/mod_choices.json"
+sh -c "$(sed -n 3p "$M/rs.args")"
+check '[ "$(wc -l < "$M/rs.args")" = 3 ] && [ "$(cat "$A/files/native/states/4D5300D1.1/slot1.hxs")" = state ] && [ "$(cat "$A/files/mod_choices.json")" = "$CHOICES" ]'
+

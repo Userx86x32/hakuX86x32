@@ -1,6 +1,12 @@
 @echo off
-rem hakuX route automation from the PC: copies route.sh and friends to the
-rem phone, runs them there, and pulls the results back next to this file.
+rem Route automation from the PC: copies route.sh and friends to the phone,
+rem runs them there, and pulls the results back next to this file. What is
+rem particular to an emulator is in its adapter: adapters\<name>.sh on the
+rem phone, adapters\<name>.cmd here (the package, its test APK, what a backup
+rem holds). ADAPTER= in route.cfg picks it (hakux by default; generic: any
+rem app, APP_PKG=<package>). tools\diag\README.md says how to write one.
+rem The commands below are hakuX's; the generic adapter has no savestates,
+rem routes or backup (save, load, record, tour, backup, restore, reinstall).
 rem   route install          the latest test APK (or: route install <file.apk or URL>)
 rem   route suite A [B]      the 30-minute batch (docs/diag-suite.md): per scene
 rem                          (bower: slot 1, wood: slot 2), 6 runs A B A B..., then a
@@ -49,14 +55,13 @@ set "REPO=https://github.com/Userx86x32/hakuX86x32.git"
 set "RES=%HERE%results-repo"
 if /i "%1"=="upload" set "UPLOAD_AFTER=1"
 set "ADB=adb"
-rem The test APK: a build of claude/eager-franklin-417v0b (release
-rem build-claude-eager-franklin-417v0b-<n>), with this runner's native side
-rem (NC_PAD_STATE: the replay waits for the savestate's load; debug.hakux.opts).
-rem Not optimized-test-v4's builds: they lack it. Build 22 and later: signed with the
-rem repository's debug key (certificate SHA-256 2C3E189E...), each installs over the last.
-set "APK_URL=https://github.com/Userx86x32/hakuX86x32/releases/download/build-claude-eager-franklin-417v0b-22/hakuX-debug-claude-eager-franklin-417v0b-22-7d7a275-sd865up.apk"
 where adb >nul 2>nul || if exist "%HERE%platform-tools\adb.exe" (set "ADB=%HERE%platform-tools\adb.exe") else if exist "%HERE%adb.exe" (set "ADB=%HERE%adb.exe") else if exist "C:\hakuX-tests\platform-tools\adb.exe" (set "ADB=C:\hakuX-tests\platform-tools\adb.exe") else if exist "C:\hakuX-tests\adb.exe" (set "ADB=C:\hakuX-tests\adb.exe") else (echo adb not found: put this file next to adb.exe or platform-tools & exit /b 1)
-set "PKG=com.rfandango.haku_x.debug"
+rem the adapter: ADAPTER (the environment), else route.cfg's ADAPTER= line, else hakux
+if not defined ADAPTER call :cfg_value ADAPTER
+if not defined ADAPTER set "ADAPTER=hakux"
+set "AD=%HERE%adapters\%ADAPTER%.cmd"
+if not exist "%AD%" (echo no adapter %ADAPTER%: %AD% isn't there & exit /b 1)
+call "%AD%" init || exit /b 1
 if /i "%1"=="queue" goto queue
 "%ADB%" get-state >nul 2>nul || (
   if /i "%1"=="upload" goto upload
@@ -64,7 +69,7 @@ if /i "%1"=="queue" goto queue
   exit /b 1
 )
 if /i "%1"=="upload" goto pull
-set "BK=%HERE%hakux-backup.tar"
+set "BK=%HERE%%BKNAME%.tar"
 if /i "%1"=="pull" goto pull
 if /i "%1"=="install" goto install
 if /i "%1"=="backup" goto backup
@@ -99,7 +104,7 @@ rem the APK: a file or URL (%1 of the call), else the test build
 set "APK=%~1"
 if "%APK%"=="" set "APK=%APK_URL%"
 if "%APK%"=="" (
-  echo no test APK set: route install ^<hakuX-debug-claude-eager-franklin-417v0b-...apk file or URL^>
+  echo no test APK set: route install ^<APK file or URL^>
   exit /b 1
 )
 rem the APK's file name (a URL's last part), recorded on the phone for batch.txt
@@ -117,19 +122,21 @@ if /i "%APK:~0,4%"=="http" (
 if errorlevel 1 (
   echo.
   echo If it says INSTALL_FAILED_UPDATE_INCOMPATIBLE, the APK is signed with another key:
-  echo uninstall first with   "%ADB%" uninstall com.rfandango.haku_x.debug
+  echo uninstall first with   "%ADB%" uninstall %PKG%
   echo or let route do it all, keeping savestates and saves:   route reinstall
   exit /b 1
 )
 rem which APK is installed, for each batch's batch.txt (apk_file, apk_build, apk_commit)
 call :push_scripts && "%ADB%" shell sh /data/local/tmp/hakux/route.sh apkrecord "%APKNAME%"
-if not "%REINST%"=="1" echo installed. Start Fable once by hand so hakuX remembers it, then: route auto
+if not "%REINST%"=="1" call "%AD%" installed
 exit /b 0
 
 rem ---- the scripts to the phone ----
 :push_scripts
 "%ADB%" shell mkdir -p /data/local/tmp/hakux
 "%ADB%" push "%HERE%route.sh" "%HERE%route_report.sh" "%HERE%route_trace.pbtx" /data/local/tmp/hakux/ >nul || exit /b 1
+rem the adapters (a folder pushed to an existing one lands inside it: hakux/adapters/)
+"%ADB%" push "%HERE%adapters" /data/local/tmp/hakux/ >nul || exit /b 1
 if exist "%HERE%route.cfg" ("%ADB%" push "%HERE%route.cfg" /data/local/tmp/hakux/ >nul) else ("%ADB%" shell rm -f /data/local/tmp/hakux/route.cfg)
 exit /b 0
 
@@ -146,7 +153,7 @@ call :wait_phone
 call :push_scripts || (echo the scripts couldn't be copied to the phone & goto :eof)
 call :phone_status
 if not "%ST%"=="running" (
-  echo [%TIME%] queue: preflight ^(the replay waits for the savestate; NC_IRQ_SCHED=1 in debug.hakux.env2^)
+  echo [%TIME%] queue: preflight: %PREFLIGHT_WHAT%
   "%ADB%" shell "sh /data/local/tmp/hakux/route.sh preflight; echo preflight-exit=$?" > "%HERE%preflight.txt" 2>&1
   type "%HERE%preflight.txt"
   findstr /c:"preflight-exit=0" "%HERE%preflight.txt" >nul || (
@@ -235,37 +242,33 @@ echo [%TIME%] the phone is back
 ping -n 6 127.0.0.1 >nul
 exit /b 0
 
-rem queue.txt the first time: the suite's batches in the order docs/diag-suite.md gives
+rem queue.txt the first time: the adapter's batches
 :queue_default
-> "%Q%" echo # route queue: one route command a line, run in order by "route queue".
->> "%Q%" echo # Lines starting with # are skipped. Finished lines go to queue.done.
->> "%Q%" echo # The charging test (V7) needs you to unplug the phone, so it isn't here.
-rem Lookout Point (slot 3, a recorded route) and Great Wood: three scenes
-rem don't fit in 30 minutes. vcpucore=0 set in every run.
->> "%Q%" echo suite scenes=lookout:3,wood:2 base:vcpucore=0 nogate:vcpucore=0,env=HAKUX_HLE_PB_VISGATE=0
->> "%Q%" echo suite scenes=lookout:3 base1:vcpucore=0 base2:vcpucore=0
->> "%Q%" echo # not run yet (v4): remove the # to run them
->> "%Q%" echo #suite spin200:pbspin=200 spin0:pbspin=0
->> "%Q%" echo #suite x4:vcpucore=1 all:vcpucore=0
->> "%Q%" echo #suite base1 base2
->> "%Q%" echo #suite spin200:pbspin=200 spin50:pbspin=50
+call "%AD%" queue_default
 exit /b 0
 
 rem ---- backup / restore of the app's own files (run-as: a debug build) ----
+rem What a backup holds is the adapter's: BACKUP_PATHS (relative to the app's
+rem folder), its checks after a backup and a restore (after_backup, after_restore).
 :backup
 call :do_backup
 goto :eof
 :do_backup
-if exist "%BK%" move /y "%BK%" "%HERE%hakux-backup.old.tar" >nul
-echo backing up savestates, settings, mod choices, GPU driver and save games (let it finish)...
-rem files/mod_choices.json: each game's mods on or off (the 60 fps mod), when the app has written it
-rem (find: nothing when it isn't there, so tar isn't given a missing file)
-"%ADB%" exec-out run-as %PKG% sh -c 'tar -cf - files/native/states files/gpu_driver shared_prefs files/native/hdd/Partition1 files/native/hdd/Partition2 $(find files -maxdepth 1 -name mod_choices.json)' > "%BK%"
-tar -tf "%BK%" 2>nul | findstr /c:"files/native/states/" >nul || (echo backup failed: no savestates in %BK% & exit /b 1)
-"%ADB%" exec-out run-as %PKG% ls files/mod_choices.json 2>nul | findstr /x /c:"files/mod_choices.json" >nul && (
-  tar -tf "%BK%" 2>nul | findstr /x /c:"files/mod_choices.json" >nul || (echo backup failed: the mod choices ^(files/mod_choices.json^) aren't in %BK% & exit /b 1)
-  echo backup: the mod choices are in it
+if "%BACKUP_PATHS%"=="" (echo backup: the %ADAPTER% adapter has nothing to back up & exit /b 1)
+if exist "%BK%" move /y "%BK%" "%HERE%%BKNAME%.old.tar" >nul
+echo backing up %BACKUP_WHAT% (let it finish)...
+rem The remote command is one double-quoted argument: cmd passes it whole and
+rem adb hands it to the phone's shell as it is (split into several, adb quoted
+rem them again and the archive held only the shell's "no closing quote"). Only
+rem the paths that exist go to tar (a missing one stops it); its messages
+rem stay out of the archive.
+"%ADB%" exec-out "run-as %PKG% sh -c 'tar -cf - $(for p in %BACKUP_PATHS%; do [ -e $p ] && echo $p; done) 2>/dev/null'" > "%BK%"
+tar -tf "%BK%" >nul 2>nul || (
+  echo backup failed: %BK% isn't an archive. What the phone said:
+  "%ADB%" shell "run-as %PKG% sh -c 'tar -cf /dev/null $(for p in %BACKUP_PATHS%; do [ -e $p ] && echo $p; done)'"
+  exit /b 1
 )
+call "%AD%" after_backup || exit /b 1
 for %%F in ("%BK%") do echo backup: %%~fF ^(%%~zF bytes^)
 exit /b 0
 
@@ -277,14 +280,7 @@ if not exist "%BK%" (echo no backup: %BK% isn't there & exit /b 1)
 "%ADB%" push "%BK%" /data/local/tmp/hakux-backup.tar >nul || (echo restore failed: push & exit /b 1)
 "%ADB%" shell "cat /data/local/tmp/hakux-backup.tar | run-as %PKG% tar -xf -"
 "%ADB%" shell rm /data/local/tmp/hakux-backup.tar
-"%ADB%" shell "run-as %PKG% sh -c 'ls files/native/states/*/'" | findstr /i hxs >nul && (echo restored: savestates are back) || (echo restore: no savestates on the phone after it & exit /b 1)
-rem the mod choices: on the phone as they were backed up (a reinstall once lost the 60 fps mod)
-tar -tf "%BK%" 2>nul | findstr /x /c:"files/mod_choices.json" >nul || (echo restore: no mod choices in the backup: check the game's Mods in hakuX ^(the 60 fps mod on^) & exit /b 0)
-tar -xOf "%BK%" files/mod_choices.json > "%HERE%mod_choices.backup" 2>nul
-"%ADB%" exec-out run-as %PKG% cat files/mod_choices.json > "%HERE%mod_choices.phone" 2>nul
-fc /b "%HERE%mod_choices.backup" "%HERE%mod_choices.phone" >nul || (echo restore failed: the mod choices on the phone aren't the backup's & exit /b 1)
-findstr /c:"60fps" "%HERE%mod_choices.phone" >nul && (echo restored: mod choices, the 60 fps mod on) || (echo restored: mod choices, but the 60 fps mod is off in them: turn it on in hakuX ^(Fable, Mods^))
-del "%HERE%mod_choices.backup" "%HERE%mod_choices.phone"
+call "%AD%" after_restore || exit /b 1
 exit /b 0
 
 :reinstall
@@ -293,7 +289,7 @@ call :do_backup || (echo nothing uninstalled: the backup didn't work & goto :eof
 "%ADB%" uninstall %PKG%
 call :install_apk %2 || (echo the install failed: your backup is in %BK%, put it back after installing with: route restore & goto :eof)
 call :do_restore
-echo Open hakuX, pick your games folder again if it asks, start Fable once, then: route auto
+call "%AD%" reinstalled
 goto :eof
 
 :pull
@@ -339,3 +335,9 @@ git -C "%RES%" commit -q -m "route results %DATE% %TIME%"
 git -C "%RES%" push -q -u origin diag-results || (echo results not uploaded: the push failed, run: route upload & goto :eof)
 echo results uploaded: https://github.com/Userx86x32/hakuX86x32/tree/diag-results/routes
 goto :eof
+
+rem ---- route.cfg's value of %1 (NAME=value, quotes taken off), when it sets one ----
+:cfg_value
+if not exist "%HERE%route.cfg" exit /b 0
+for /f "usebackq tokens=1,* delims==" %%A in (`findstr /b /c:"%1=" "%HERE%route.cfg"`) do set "%1=%%~B"
+exit /b 0
