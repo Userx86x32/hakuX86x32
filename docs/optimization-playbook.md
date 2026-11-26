@@ -11,7 +11,8 @@ Companion documents:
 - The device profile (`Galaxy_S24_Plus_Device_Profile_v1.4.md`, kept by the
   owner): the phone's limits, sustained-load behaviour, and the pitfalls below.
 - `tools/diag/`: the route runner (`route.bat` on the PC, `route.sh` on the
-  phone) and `session.sh` (a manual play session's logs and sensors).
+  phone, an adapter per emulator; `tools/diag/README.md`) and `session.sh`
+  (a manual play session's logs and sensors).
 
 ## The loop
 
@@ -128,23 +129,33 @@ the clue.
 
 ## Porting the runner to another emulator
 
-The runner is a generic core plus a per-emulator adapter
-(see the `tools/diag` adapter task). An adapter provides:
+The runner (`tools/diag/`) is a generic core plus one adapter per emulator:
+`adapters/<name>.sh` on the phone (sourced by `route.sh` and
+`route_report.sh`) and `adapters/<name>.cmd` for `route.bat`, picked by
+`ADAPTER=` in `route.cfg`. `tools/diag/README.md` lists every hook and
+variable; these are the ones a port is about:
 
-| Hook | hakuX example |
-|---|---|
-| package and native process name | `com.rfandango.haku_x.debug`, `:native` |
-| start the game | the app's last-game launch, or `am start` |
-| load a savestate | `setprop debug.hakux.state load:<slot>` |
-| start input playback / recording | `NC_PAD_SCRIPT=@file` / `NC_PAD_RECORD` in `debug.hakux.env` |
-| the run's preconditions | the mod lines, `(waits for a savestate's load)` |
-| log tags to capture | `hakuX-hle-hitch`, `hakuX-native-*`, ... |
-| settings a variant can change | `setprop debug.hakux.*`, the app's per-game options |
-| thread names for schedstat | `SDLThread` (vCPU), `hle-pb`, `hle.render`, ... |
-| per-frame metrics from its logs | stutters with causes, vblank latency |
+| Hook | What | hakuX (`hakux`) | any app (`generic`) |
+|---|---|---|---|
+| `PKG`, `PROC` | package and the process measured | `com.rfandango.haku_x.debug`, `$PKG:native` | `APP_PKG` (`APP_PROCESS`) |
+| `ad_wait_app`, `ad_run_prepare` | start the game | the app's last game (`am start -d <dvdUri>`), again when it closed | `am force-stop`, then `am start` (its launcher activity) every run |
+| `ad_run_start` | load a savestate | `setprop debug.hakux.state load:<slot>` (a new process) | the start alone |
+| `ad_scene_ready`, `ad_run_started`, `ad_run_wait_done` | start input playback; the measured window | `NC_PAD_SCRIPT=@<route>` in `debug.hakux.env`, `NC_PAD_STATE=1` in `env2`; from `pad script: started` to `done` | `APP_WAIT` s after the start, then `APP_SECS` s |
+| `ad_command` (`route record`) | record input | `NC_PAD_RECORD=<file>` in `debug.hakux.env` | none |
+| `ad_check_run`, `ad_check_run_end` | the run's preconditions (failing twice stops the batch) | the `hakuX-native-mods` lines (the 60 fps mod required), `(waits for a savestate's load)`, `NC_IRQ_SCHED=1`, the variant's opts, `env=` and `pbspin=` | the process lasted the window |
+| `ad_checksums` | what a run starts from (changed mid-batch: reported apart) | the route's and the savestate's sha256 | none |
+| `LOG_TAGS` | log tags to capture | `hakuX-hle-hitch`, `hakuX-native-*`, `hakuX-hle-pb`, ... | `ActivityManager`, crashes |
+| `ad_variant_set`, `SAVED_PROPS` | settings a variant can change (put back after) | `debug.hakux.*`, `mod=` (the app's mod choices), `env=` (`debug.hakux.env2`), `scale=` and the app's options (`debug.hakux.opts`) | any `debug.*` property |
+| `THREADS` | thread names for the schedstat table | `SDLThread` (vCPU), `hle-pb`, `hle.render`, `SDLActivity`, `apu.frame` | the main thread, `RenderThread` (`APP_THREADS`); the busiest by name |
+| `ad_report_run`, `ad_report_extra`, `ad_section_*` | per-frame metrics and report sections from its logs | stutters with causes (`hakuX-hle-hitch`), vblank latency (`hakuX-native-vbl`), late interrupts (`hakuX-native-irq`), the decoder (`hakuX-hle-pb`), interval changes (`hakuX-native-watch`) | none: fps and gaps from SurfaceFlinger |
+| `.cmd`: `APK_URL`, `BACKUP_PATHS` | the test APK; what a backup holds | the debug build; savestates, settings, mod choices, saves | none |
 
-The core (batches, A/B, cool-downs, sensors, schedstat, Perfetto,
-simpleperf, SurfaceFlinger, report, upload, adb reconnects) stays the same.
+The core (batches and the queue, A/B, `scenes=` and `runs=`, cool-downs,
+sensors, schedstat, Perfetto, simpleperf, SurfaceFlinger, failed runs, the
+build in `batch.txt`, report, upload, adb reconnects, properties put back)
+stays the same. Start a new emulator on the generic adapter (it measures
+any game as it is), then write its adapter as its hooks become available:
+a savestate load by intent or property, an input replay, its own counters.
 
 ## Phone and toolchain pitfalls (Galaxy S24+, Android 17)
 

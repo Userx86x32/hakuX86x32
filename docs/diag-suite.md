@@ -6,6 +6,10 @@ variants to test, each aimed at a possible cause of stutters and dropped
 frames. Batches run in two scenes, Bowerstone and Great Wood, and upload to
 the `diag-results` branch.
 
+The runner is a core and an adapter per emulator; this suite is the hakuX
+adapter's (`tools/diag/adapters/hakux.sh`, the default; `tools/diag/README.md`
+for the others and for writing one).
+
 Everything is typed on the PC (`C:\hakuX-tests`), never on the phone:
 `route.bat` pushes the runner to the phone, starts it there detached, follows
 it, and pulls and uploads the results. Settings live in `route.cfg` next to
