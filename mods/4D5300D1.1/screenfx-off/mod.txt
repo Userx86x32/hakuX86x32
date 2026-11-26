@@ -1,5 +1,5 @@
 name: Screen effects off
-description: Turns off Fable's whole screen-effect renderer: the glow (bloom) and the other full-screen passes it draws. Stronger than "Glow off"; other screen effects may go with it. Use one or the other.
+description: Turns off Fable's whole screen-effect renderer: the glow (bloom) and the other full-screen passes it draws. The bloom and the screen distortion (displacement) some moments use. "Bloom off" removes only the bloom. Use one or the other.
 author: hakuX
 
 # Fable's glow renderer (made at 0x177270) draws each frame at 0x17A690 only

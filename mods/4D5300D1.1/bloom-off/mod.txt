@@ -1,0 +1,13 @@
+name: Bloom off
+description: Removes the white glow (bloom) around pale characters and light sources, strongest at night near lights. Fable's other screen effects (the screen distortion some moments use) stay. Use it instead of "Screen effects off", not with it.
+author: hakuX
+
+# Fable's screen-effect renderer (made at 0x177270) draws each frame at
+# 0x17A690: the glow colours (0x177D90), then the bloom: bright parts picked
+# out and blurred (0x177F80: the GLOW, GLOW_NEG and GLOW_BLUR shaders) and
+# put on the screen (0x179A90: TEXTURE_APPLY_GLOW), then, while one is
+# active, the screen displacement (0x17A270: DISPLACEMENT, COPY). The two
+# bloom calls and their pushes (0x17A6A7-0x17A6B2) become NOPs; both are
+# stdcall with the renderer as their one argument, so the stack is as before.
+[default.xbe]
+0x0017A6A7: 57 E8 D3 D8 FF FF 57 E8 DD F3 FF FF -> 90 90 90 90 90 90 90 90 90 90 90 90
