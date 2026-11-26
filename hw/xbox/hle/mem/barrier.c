@@ -7,6 +7,7 @@
 #include "hw/xbox/hle/mem/barrier.h"
 #include "hw/xbox/hle/mem/guestmem.h"
 #include "hw/xbox/hle/mem/pageuse.h"
+#include "hw/xbox/hle/prop.h"
 
 #include <sched.h>
 
@@ -627,6 +628,32 @@ void hle_barrier_guard_stats(uint64_t *neighbours, uint64_t *hot)
 #define RPT_PAGES   8
 #define RPT_PENDING 256
 #define RPT_WAIT_NS 30000000ll
+
+/* debug: debug.hakux.visgate_us, the most a read waits for its reports (us;
+ * unset: RPT_WAIT_NS), read every 64 waits. Past it the read takes what the
+ * page holds: the test's result from before, on a title that reads its
+ * tests a frame late (Fable: whole seconds of a Great Wood route waited,
+ * the guest taking no interrupt meanwhile, its vblank and flip late). 0
+ * doesn't wait. */
+static int64_t rpt_wait_ns(void)
+{
+    static int64_t ns = RPT_WAIT_NS;
+    static unsigned n;
+    if (n++ % 64 == 0) {
+        char v[PROP_VALUE_MAX] = "";
+        int64_t want = RPT_WAIT_NS;
+        if (hle_prop_get("debug.hakux.visgate_us", v) > 0 && v[0]) {
+            const long long us = strtoll(v, NULL, 10);
+            want = us < 0 ? RPT_WAIT_NS : (us > 30000 ? 30000 : us) * 1000ll;
+        }
+        if (want != ns) {
+            hle_log("hakuX-hle-pb", "report gate: a read waits at most %.1f ms (debug.hakux.visgate_us)",
+                    want / 1e6);
+        }
+        ns = want;
+    }
+    return ns;
+}
 static struct {
     uint32_t page[RPT_PAGES];           /* pa >> 12 */
     bool shut[RPT_PAGES];               /* without guest access */
@@ -799,12 +826,13 @@ static bool rpt_access(uint32_t pa)
          * a test soon after it (pbdraw.c) */
         __atomic_store_n(&g_rpt_waiting, 1, __ATOMIC_RELEASE);
         bool (*held)(void) = __atomic_load_n(&g_rpt_held, __ATOMIC_ACQUIRE);
+        const int64_t limit = rpt_wait_ns();
         for (;;) {
             rpt_lock();
             late = rpt_late((unsigned)pg, frame, &ahead);
             /* the decoder short of a report and waiting on this thread */
             const bool stuck = late && ahead && held && held();
-            if (late && (stuck || hle_now_ns() - t0 > RPT_WAIT_NS)) {
+            if (late && (stuck || hle_now_ns() - t0 >= limit)) {
                 /* the back end won't write them now (stuck), or at all (a
                  * test the decoder dropped): not waited for again */
                 for (unsigned k = 0; k < RPT_PENDING; k++) {
@@ -815,7 +843,7 @@ static bool rpt_access(uint32_t pa)
                 }
                 if (stuck) {
                     g_rpt.held++;
-                } else if (g_rpt.timeouts++ < 8) {
+                } else if (g_rpt.timeouts++ < 8 && limit >= RPT_WAIT_NS) {
                     hle_log("hakuX-hle-pb", "report gate: page %08x's reports not written in 30 ms",
                             g_rpt.page[pg] << 12);
                 }
@@ -825,7 +853,7 @@ static bool rpt_access(uint32_t pa)
             if (!late) {
                 break;
             }
-            hle_sem_timedwait(&g_rpt_sem, 2);   /* a write, or 2 ms */
+            hle_sem_timedwait(&g_rpt_sem, limit < 2000000 ? 1 : 2);   /* a write, or 1-2 ms */
         }
         __atomic_store_n(&g_rpt_waiting, 0, __ATOMIC_RELEASE);
         hle_host_guest_hold(false);

@@ -155,8 +155,9 @@ static bool session_threads(void)
  * middle cores while the fastest one (the S24+'s Cortex-X4, cpu7) idled at
  * 1.2 GHz. Its affinity is the cores with the highest cpuinfo_max_freq
  * (the prime core; all of them where every core is alike). The other threads
- * keep theirs. debug.hakux.vcpucore 0 gives it every core back, 1 (or unset)
- * pins it again; read now and then, on the vCPU's thread. */
+ * keep theirs. debug.hakux.vcpucore 1 pins it; unset or 0, every core (the
+ * default since a Fable batch: pinned, the vCPU waited for its one core);
+ * read now and then, on the vCPU's thread. */
 static int g_core_state = -1;               /* -1: not set, 0: all cores, 1: the fastest */
 static cpu_set_t g_fast, g_all;
 static int g_nfast = -1;
@@ -216,7 +217,9 @@ static void vcpu_core_poll(void)
         return;
     }
     char v[PROP_VALUE_MAX] = "";
-    const int want = hle_prop_get("debug.hakux.vcpucore", v) > 0 && !strcmp(v, "0") ? 0 : 1;
+    /* off unless asked for: a Fable batch had the pinned vCPU waiting 3.5 s
+     * a Great Wood route for its one core (0.4 s free), 19% more stutters */
+    const int want = hle_prop_get("debug.hakux.vcpucore", v) > 0 && !strcmp(v, "1") ? 1 : 0;
     if (want == g_core_state) {
         return;
     }
