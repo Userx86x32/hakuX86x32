@@ -1,0 +1,109 @@
+hakuX route report: BATCH
+
+variant                runs     fps  stutters    per min    over ms    worst  hangs   gpuss C
+lookout/a                 2    50.0       4.0        6.7       1221   1300.0      2      58.8
+lookout/b                 1    49.9       4.0        6.6       1221   1200.0      1      58.8
+bower/a                   1    50.0       4.0        6.7       1221   1200.0      1      49.4
+bower/b                   1     0.0       4.0        0.0       1120   1100.0      1       0.0
+
+Vblanks (the title's handler answering each vblank, and its flips after them; averages per run):
+variant                runs answer ms  worst ms     >2 ms     >8 ms  unanswered    flip ms flip worst PI changes
+lookout/a                 2      0.58      9.30      10.0       3.0         3.0       1.48       6.50        2.0
+lookout/b                 1      0.58      9.20      10.0       3.0         3.0       1.48       6.50        2.0
+bower/a                   1      0.58      9.20      10.0       3.0         3.0       1.48       6.50        2.0
+bower/b                   1      0.57      9.10       6.0       2.0         3.0       1.47       6.50        2.0
+
+Threads (averages per run, ms over the replay; run = on a CPU, wait = ready but no CPU free):
+variant                start C  vCPU run      wait    decode      wait    render      wait      main      wait       apu      wait
+                               SDLThread              hle-pb           hle.rendr           SDLActvty           apu.frame          
+lookout/a                   40     30000      2500     12000      1700      8000       600       900        40      2000        90
+lookout/b                   40     60000      2500     12000      3400      8000       600      1800        40      2000        90
+bower/a                     40     30000      2500     12000      1700      8000       600       900        40      2000        90
+bower/b                     39        NA        NA        NA        NA        NA        NA        NA        NA        NA        NA
+
+JIT and display (averages per run; SF = what SurfaceFlinger presented of hakuX's layer, gaps = over 1.5x the median frame interval):
+variant                    JIT   JIT/10s SF frames  SF gaps  SF worst SF median            SF source  mods applied
+lookout/a                    3         2      2089       35      50.0      16.7            latency    60fps none
+lookout/b                    3         2      1500       80     100.0      16.0            timestats  60fps
+bower/a                      3         2        NA       NA        NA        NA            NA         60fps
+bower/b                      3         2        NA       NA        NA        NA            NA         60fps
+
+Late interrupts (hakuX-native-irq: delivered over 8 ms after the line rose; per run; by the first reason the kernel couldn't deliver it):
+variant                  late    ISR   IF 0   IRQL   none  late avg  late max   ran avg   ran max   host wait
+lookout/a                 4.0    1.0    1.0    1.0    1.0      12.6      20.0       3.6       8.0         2.4
+lookout/b                 4.0    1.0    1.0    1.0    1.0      12.6      20.0       3.6       8.0         2.4
+bower/a                   4.0    1.0    1.0    1.0    1.0      12.6      20.0       3.6       8.0         2.4
+bower/b                   0.0    0.0    0.0    0.0    0.0        NA        NA        NA        NA          NA
+  (late: lines a run; ISR = an ISR running, IF 0 = interrupts off, IRQL = IRQL at or above it, none = no kernel entry
+   meanwhile; ran = ms the guest CPU's thread ran of the delay; host wait = ms it waited for a host CPU)
+
+Decoder (hle-pb thread from schedstat, ms per run; hakuX-hle-pb statistics lines summed over the replay):
+variant                 pbspin us    pb run   pb wait  vCPU run vCPU wait pb lines     kicks        words    flips
+lookout/a                  50/150     12000      1700     30000      2500        2      2500        90000      300
+lookout/b                     100     12000      3400     60000      2500        2      2500        90000      300
+bower/a                       100     12000      1700     30000      2500        2      2500        90000      300
+bower/b                        50        NA        NA        NA        NA        0        NA           NA       NA
+
+Failed runs (their check failed: kept out of everything above):
+  07-bower-a                   mods: the variant's are '60fps', the core applied 'none'
+
+Probe runs (not in the comparisons above; their collectors cost CPU):
+  04-lookout-probe-perfetto        perfetto       50.0 fps    4 stutters (  6.7/min)
+  09-bower-probe-simpleperf        simpleperf     50.0 fps    4 stutters (  6.7/min)
+    04-lookout-probe-perfetto/: probe_exit=0 probe_output_bytes=12345
+    04-lookout-probe-perfetto/trace.pftrace (6 bytes)
+    09-bower-probe-simpleperf/: probe_exit=0 probe_output_bytes=777 probe_Samples=4000
+    09-bower-probe-simpleperf/perf.data (5 bytes)
+    09-bower-probe-simpleperf/simpleperf.txt (24 bytes)
+
+Per run:
+  01-lookout-a             lookout/a            36.0 s   50.0 fps    4 stutters (  6.7/min), worst 1100.0 ms, caps big/prime 2706000/3176500 kHz, gpuss 49.4 C
+                           vblank answer 0.57 avg 9.10 max ms, 6 over 2 ms, 2 over 8 ms, 3 unanswered; flips 1.47 avg 6.50 max ms after; interval 1, 2 changes (1>2>0x80000002)
+  02-lookout-b             lookout/b            36.1 s   49.9 fps    4 stutters (  6.6/min), worst 1200.0 ms, caps big/prime 2706000/3176500 kHz, gpuss 58.8 C
+                           vblank answer 0.58 avg 9.20 max ms, 10 over 2 ms, 3 over 8 ms, 3 unanswered; flips 1.48 avg 6.50 max ms after; interval 1, 2 changes (1>2>0x80000002)
+  03-lookout-a             lookout/a            35.9 s   50.1 fps    4 stutters (  6.7/min), worst 1300.0 ms, caps big/prime 2706000/3176500 kHz, gpuss 68.2 C
+                           vblank answer 0.59 avg 9.30 max ms, 14 over 2 ms, 4 over 8 ms, 3 unanswered; flips 1.48 avg 6.50 max ms after; interval 1, 2 changes (1>2>0x80000002)
+  04-lookout-probe-perfetto lookout/a/probe-perfetto   36.0 s   50.0 fps    4 stutters (  6.7/min), worst 1100.0 ms, caps big/prime NA/NA kHz, gpuss 0.0 C
+                           vblank answer 0.57 avg 9.10 max ms, 6 over 2 ms, 2 over 8 ms, 3 unanswered; flips 1.47 avg 6.50 max ms after; interval 1, 2 changes (1>2>0x80000002)
+  05-bower-a               bower/a              36.0 s   50.0 fps    4 stutters (  6.7/min), worst 1200.0 ms, caps big/prime 2706000/3176500 kHz, gpuss 49.4 C
+                           vblank answer 0.58 avg 9.20 max ms, 10 over 2 ms, 3 over 8 ms, 3 unanswered; flips 1.48 avg 6.50 max ms after; interval 1, 2 changes (1>2>0x80000002)
+  06-bower-b               bower/b               0.0 s    0.0 fps    4 stutters (  0.0/min), worst 1100.0 ms, caps big/prime NA/NA kHz, gpuss 0.0 C
+                           vblank answer 0.57 avg 9.10 max ms, 6 over 2 ms, 2 over 8 ms, 3 unanswered; flips 1.47 avg 6.50 max ms after; interval 1, 2 changes (1>2>0x80000002)
+  09-bower-probe-simpleperf bower/a/probe-simpleperf   36.0 s   50.0 fps    4 stutters (  6.7/min), worst 1100.0 ms, caps big/prime NA/NA kHz, gpuss 0.0 C
+                           vblank answer 0.57 avg 9.10 max ms, 6 over 2 ms, 2 over 8 ms, 3 unanswered; flips 1.47 avg 6.50 max ms after; interval 1, 2 changes (1>2>0x80000002)
+
+Presentation interval changes during the replays (the watch, 0x862494; per scene, Lookout Point first):
+  Lookout Point (lookout): 8 changes, 8 to 30 fps
+    01-lookout-a                 +   1.8 s  1 > 2  (12:10:08.000, vblank 130)   <- Fable asked for 30 fps
+    01-lookout-a                 +  29.8 s  2 > 0x80000002  (12:10:36.000, vblank 1700)   <- Fable asked for 30 fps
+    02-lookout-b                 +   1.8 s  1 > 2  (12:11:08.000, vblank 130)   <- Fable asked for 30 fps
+    02-lookout-b                 +  29.8 s  2 > 0x80000002  (12:11:36.000, vblank 1700)   <- Fable asked for 30 fps
+    03-lookout-a                 +   1.8 s  1 > 2  (12:12:08.000, vblank 130)   <- Fable asked for 30 fps
+    03-lookout-a                 +  29.8 s  2 > 0x80000002  (12:12:36.000, vblank 1700)   <- Fable asked for 30 fps
+    04-lookout-probe-perfetto    +   1.8 s  1 > 2  (12:13:08.000, vblank 130)   <- Fable asked for 30 fps
+    04-lookout-probe-perfetto    +  29.8 s  2 > 0x80000002  (12:13:36.000, vblank 1700)   <- Fable asked for 30 fps
+  bower (bower): 6 changes, 6 to 30 fps
+    05-bower-a                   +   1.8 s  1 > 2  (12:14:08.000, vblank 130)   <- Fable asked for 30 fps
+    05-bower-a                   +  29.8 s  2 > 0x80000002  (12:14:36.000, vblank 1700)   <- Fable asked for 30 fps
+    06-bower-b                   +   1.8 s  1 > 2  (12:15:08.000, vblank 130)   <- Fable asked for 30 fps
+    06-bower-b                   +  29.8 s  2 > 0x80000002  (12:15:36.000, vblank 1700)   <- Fable asked for 30 fps
+    09-bower-probe-simpleperf    +   1.8 s  1 > 2  (12:18:08.000, vblank 130)   <- Fable asked for 30 fps
+    09-bower-probe-simpleperf    +  29.8 s  2 > 0x80000002  (12:18:36.000, vblank 1700)   <- Fable asked for 30 fps
+
+Commonest causes (count, ms over the expected frame time in all; per variant):
+  bower/a:
+       1 x    1167 ms  vCPU in the guest # ms
+       1 x      29 ms  report gate # ms
+       2 x      25 ms  vCPU waited on the GPU # ms
+  bower/b:
+       1 x    1067 ms  vCPU in the guest # ms
+       1 x      29 ms  report gate # ms
+       2 x      24 ms  vCPU waited on the GPU # ms
+  lookout/a:
+       2 x    2333 ms  vCPU in the guest # ms
+       2 x      58 ms  report gate # ms
+       4 x      51 ms  vCPU waited on the GPU # ms
+  lookout/b:
+       1 x    1167 ms  vCPU in the guest # ms
+       1 x      29 ms  report gate # ms
+       2 x      25 ms  vCPU waited on the GPU # ms
