@@ -1,0 +1,12 @@
+name: Glow off
+description: Removes the soft white glow (bloom) around bright things: pale characters and light sources, strongest at night near lights. The rest of the picture is unchanged.
+author: hakuX
+
+# Fable's glow renderer (made at 0x177270, which loads the SCREEN_FX_GLOW
+# shaders) runs each frame at 0x17A690: if its flag +0x8 is set, the glow
+# pass 0x177D90 (the environment's glow colour and strength, x255) when
+# +0xC is set, then its other passes. Both flags are 1 from the start. The
+# glow pass is skipped here as the game skips it with +0xC clear: the branch
+# at 0x17A6A0 (je over the call) always jumps.
+[default.xbe]
+0x0017A6A0: 74 05 -> EB 05

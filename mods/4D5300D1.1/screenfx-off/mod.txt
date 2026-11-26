@@ -1,0 +1,10 @@
+name: Screen effects off
+description: Turns off Fable's whole screen-effect renderer: the glow (bloom) and the other full-screen passes it draws. Stronger than "Glow off"; other screen effects may go with it. Use one or the other.
+author: hakuX
+
+# Fable's glow renderer (made at 0x177270) draws each frame at 0x17A690 only
+# while its flag +0x8 is set (1 from the start): the glow pass 0x177D90 and
+# the passes 0x177F80, 0x179A90 and 0x17A270. The branch at 0x17A69B, taken
+# with +0x8 clear, always jumps here: none of them run.
+[default.xbe]
+0x0017A69B: 74 30 -> EB 30
