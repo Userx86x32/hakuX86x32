@@ -80,6 +80,8 @@ COOL_MAX=10                 # ... for at most this many seconds (the game runs o
                             # waiting barely cools it: 90 s never got 50-58 C under 45 C)
 WATCH=0x862494              # debug.hakux.watch: Fable's presentation interval (D3D)
 PROBE_SECS=20               # a probe's length, mid-route
+REQUIRED_MODS=60fps         # mods every run must apply (their "<mod>: [xbe] ...: N bytes" line)
+                            # unless its variant sets mod=; "" for none
 IRQ_SCHED=1                 # NC_IRQ_SCHED for every run (hakuX-native-irq: a late interrupt's
                             # thread wait), in debug.hakux.env2 beside the replay's NC_PAD_STATE
 CFG=${HAKUX_CFG:-$HERE/route.cfg}
@@ -455,7 +457,7 @@ set_variant() {
   for p in $VARIANT_PROPS; do setprop "$p" "$(saved_value "$p")"; done
   [ -n "$MOD_BATCH" ] && put_back_mod_choices
   game=$(slot_game "$2")
-  opts= envx=
+  opts= envx= modset=
   for kv in $(echo "${1#*:}" | tr ',' ' '); do
     [ "$kv" = "$1" ] && break
     p=${kv%%=*}; v=${kv#*=}
@@ -466,6 +468,7 @@ set_variant() {
       mod) [ -n "$game" ] || die "mod $v: no savestate in slot $2 (its folder names the game)"
            [ "$v" = none ] || mods_with_patches | grep -qx "$v" ||
              die "mod $v: not in hakuX's mod list for this game (files/native/mods.txt; run the game once)"
+           modset=1
            set_mod_choice "$game" "$v"
            [ "$(mods_on "$game")" = "${v#none}" ] ||
              die "mod $v: the app's mod choices didn't take it (files/mod_choices.json: $(mods_on "$game"))"
@@ -496,6 +499,22 @@ set_variant() {
     exp=" ?"
   fi
   echo "mods_expected=${exp# }"
+  # the baseline's mods (the 60 fps mod): required of every run whose
+  # variant doesn't choose its mods (a reinstall lost the choice once, and
+  # whole batches ran without it, passing as the choices said)
+  [ -n "$modset" ] && echo "mods_required=" || echo "mods_required=$REQUIRED_MODS"
+}
+
+# The required mods (list $3) whose patch line process $2 didn't log
+# ("60fps: [default.xbe] 0003f776: 10 bytes"), in logcat $1.
+mods_missing() {
+  ma=$(mods_applied "$1" "$2")
+  for m in $3; do case " $ma " in *" $m "*) ;; *) printf '%s ' "$m";; esac; done | sed 's/ $//'
+}
+# Why, if the log says: a savestate made with other mods (its mods taken back).
+mods_missing_hint() {
+  l=$(grep "hakuX-native-mods( *$2): savestate " "$1" | head -n 1 | sed 's/^.*): //')
+  echo "hakuX's mod choices for the game have it off (lost at a reinstall?): turn it on in hakuX (Fable, Mods), then run again${l:+; the log: $l}"
 }
 
 # What the run's game process (pid $2, logcat $1) applied: its mods with
@@ -540,6 +559,8 @@ check_run() {
   grep -h "hakuX-native-mods( *$spid): vblank at" "$rd/logcat.txt" | sed 's/^.*): /mods_vblank=/' | head -n 1 >> "$rd/run.txt"
   bad=
   [ "$got" = "$want" ] || [ "$want" = "?" ] || bad="mods: the variant's are '${want:-none}', the core applied '${got:-none}'"
+  miss=$(mods_missing "$rd/logcat.txt" "$spid" "$(sed -n 's/^mods_required=//p' "$rd/run.txt")")
+  [ -z "$miss" ] || bad="${bad:+$bad; }mods: required $miss not applied (no \"$miss: [default.xbe] ...: N bytes\" line): $(mods_missing_hint "$rd/logcat.txt" "$spid")"
   o=$(sed -n 's/^debug.hakux.opts=//p' "$rd/run.txt")
   if [ -n "$o" ] && [ "$(opts_applied "$rd/logcat.txt" "$spid")" != "$o" ]; then
     bad="${bad:+$bad; }debug.hakux.opts '$o' not read by the game (this APK is older than build 14, or the property didn't reach it)"
@@ -865,6 +886,16 @@ cmd_preflight() {
     spid=$(grep -m1 "pad script: started" "$RUN_DIR/logcat.txt" | sed -n 's/^[^(]*( *\([0-9]*\)).*/\1/p')
     l=$(grep "hakuX-native-usb( *$spid): pad script: " "$RUN_DIR/logcat.txt" | grep -m1 "(waits for a savestate's load)")
     if [ -n "$l" ]; then say "ok: ${l#*): }"; else say "FAILED: no \"(waits for a savestate's load)\" (this APK lacks NC_PAD_STATE)"; ok=; fi
+    if [ -n "$REQUIRED_MODS" ]; then
+      miss=$(mods_missing "$RUN_DIR/logcat.txt" "$spid" "$REQUIRED_MODS")
+      if [ -z "$miss" ]; then
+        for m in $REQUIRED_MODS; do
+          say "ok: $(grep "hakuX-native-mods( *$spid): $m: \[" "$RUN_DIR/logcat.txt" | head -n 1 | sed 's/^.*): //')"
+        done
+      else
+        say "FAILED: the $miss mod wasn't applied: $(mods_missing_hint "$RUN_DIR/logcat.txt" "$spid")"; ok=
+      fi
+    fi
     if [ "$IRQ_SCHED" = 1 ]; then
       e2=$(sed -n 's/^debug.hakux.env2=//p' "$RUN_DIR/run.txt")
       case ";$e2;" in

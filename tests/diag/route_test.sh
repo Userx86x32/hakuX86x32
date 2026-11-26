@@ -262,6 +262,24 @@ echo "== a scene that must be recorded (not in TOUR_SCENES) and has no route: th
 sh "$ROOT/tools/diag/route.sh" suite scenes=lookout:1 base > "$M/look.log" 2>&1 && echo "(it started)"
 check 'grep -q "error: scene lookout: no route recorded .*route record lookout 1" "$M/look.log" && [ ! -f "$M/out/lookout.txt" ]'
 
+echo "== the 60 fps mod lost from the app's choices (a reinstall): the preflight and every run without mod= fail"
+printf '%s' '{"4D5300D1.1\/cheat\/x":true}' > "$A/files/mod_choices.json"
+rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
+pre=0; sh "$ROOT/tools/diag/route.sh" preflight > "$M/pre60.log" 2>&1 || pre=$?
+check '[ $pre = 1 ] && grep -q "FAILED: the 60fps mod wasn.t applied: hakuX.s mod choices for the game have it off" "$M/pre60.log"'
+rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
+flip=$(cat "$M/out/.probe_flip")
+sh "$ROOT/tools/diag/route.sh" suite scenes=bower:1 base m40:mod=40fps > "$M/no60.log" 2>&1 && echo "(it didn't stop)"
+rm -f "$M/out/.suite_state"; echo "$flip" > "$M/out/.probe_flip"
+B=$(ls -d "$M"/out/suite-2* | tail -n 1)
+check 'grep -q "^mods_required=60fps$" "$B/01-bower-base/run.txt" && grep -q "^failed=mods: required 60fps not applied" "$B/01-bower-base/run.txt"'
+check 'grep -q "^mods_required=$" "$B/02-bower-m40/run.txt" && ! grep -q "^failed=" "$B/02-bower-m40/run.txt"'
+check 'grep -q "error: variant base failed its check twice" "$M/no60.log"'
+printf '%s' "$CHOICES" > "$A/files/mod_choices.json"
+rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
+pre=0; sh "$ROOT/tools/diag/route.sh" preflight > "$M/pre60b.log" 2>&1 || pre=$?
+check '[ $pre = 0 ] && grep -q "ok: 60fps: \[default.xbe\] 0003f776: 10 bytes" "$M/pre60b.log"'
+
 echo "== suite: a cold start with hints off (A) against the default (B); the probe swaps to simpleperf"
 : > "$M/setprops"; rm -f "$M/pid" "$M/booted"; : > "$M/logcat"
 echo old > "$A/files/native/hle/cache.bin"

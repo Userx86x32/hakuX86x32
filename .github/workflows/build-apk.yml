@@ -5,8 +5,11 @@
 #
 # Signing: the repository secret DEBUG_KEYSTORE_B64 (a debug keystore,
 # base64; store and key password "android", alias androiddebugkey) signs
-# every build with the same key, so each one installs over the last. Without
-# it the build gets a new key each run and has to be uninstalled first.
+# every build with the same key, so each one installs over the last. A build
+# without it, or whose certificate isn't DEBUG_CERT_SHA256 (that keystore's),
+# fails: a throwaway key's APK can't update the one installed, and the
+# reinstall it takes once lost the app's mod choices (every release up to
+# build 17 had its own key).
 name: Build APK
 
 on:
@@ -33,6 +36,9 @@ concurrency:
 
 env:
   NDK_VERSION: 29.0.14206865
+  # The debug key's certificate (SHA-256): keytool -list -v -keystore
+  # debug.keystore -storepass android (the one in DEBUG_KEYSTORE_B64)
+  DEBUG_CERT_SHA256: 2C3E189E307D7357133559C2A2CD8F0D9638E98C02B6E9ECCE5B89AEF6C67C9D
   DEPS: ${{ github.workspace }}/../native-deps
 
 jobs:
@@ -114,12 +120,18 @@ jobs:
           KEYSTORE: ${{ secrets.DEBUG_KEYSTORE_B64 }}
         run: |
           mkdir -p ~/.android
-          if [ -n "$KEYSTORE" ]; then
-            echo "$KEYSTORE" | base64 -d > ~/.android/debug.keystore
-            echo "Signed with the repository's debug key (DEBUG_KEYSTORE_B64)."
-          else
-            echo "::warning::No DEBUG_KEYSTORE_B64 secret: this APK gets a new key and won't install over an earlier build."
+          if [ -z "$KEYSTORE" ]; then
+            echo "::error::No DEBUG_KEYSTORE_B64 secret: the APK would get a throwaway key and not install over the last build. Add the secret (the debug keystore, base64)."
+            exit 1
           fi
+          echo "$KEYSTORE" | base64 -d > ~/.android/debug.keystore
+          got=$(keytool -list -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey |
+            sed -n 's/^[[:space:]]*SHA256: //p' | tr -d ':' | head -n 1)
+          if [ "$got" != "$DEBUG_CERT_SHA256" ]; then
+            echo "::error::DEBUG_KEYSTORE_B64 holds another key (certificate SHA-256 $got, expected $DEBUG_CERT_SHA256)."
+            exit 1
+          fi
+          echo "Signing with the repository's debug key (certificate SHA-256 $got)."
 
       - name: APK
         working-directory: android
@@ -147,6 +159,14 @@ jobs:
           name="hakuX-debug-${branch}-${GITHUB_RUN_NUMBER}-${sha}-${cpu}.apk"
           src="$(ls android/app/build/outputs/apk/debug/*.apk | head -1)"
           cp "$src" "$name"
+          # signed with the debug key (APK Signature Scheme v2/v3: apksigner)
+          signer="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner"
+          got=$("$signer" verify --print-certs "$name" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr 'a-f' 'A-F')
+          if [ "$got" != "$DEBUG_CERT_SHA256" ]; then
+            echo "::error::$name is signed with certificate SHA-256 '$got', not the debug key's $DEBUG_CERT_SHA256."
+            exit 1
+          fi
+          echo "$name: signed with the debug key ($got)"
           echo "name=$name" >> "$GITHUB_OUTPUT"
           echo "tag=build-${branch}-${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
 

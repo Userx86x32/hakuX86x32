@@ -256,9 +256,15 @@ call :do_backup
 goto :eof
 :do_backup
 if exist "%BK%" move /y "%BK%" "%HERE%hakux-backup.old.tar" >nul
-echo backing up savestates, settings, GPU driver and save games (let it finish)...
-"%ADB%" exec-out run-as %PKG% tar -cf - files/native/states files/gpu_driver shared_prefs files/native/hdd/Partition1 files/native/hdd/Partition2 > "%BK%"
+echo backing up savestates, settings, mod choices, GPU driver and save games (let it finish)...
+rem files/mod_choices.json: each game's mods on or off (the 60 fps mod), when the app has written it
+rem (find: nothing when it isn't there, so tar isn't given a missing file)
+"%ADB%" exec-out run-as %PKG% sh -c 'tar -cf - files/native/states files/gpu_driver shared_prefs files/native/hdd/Partition1 files/native/hdd/Partition2 $(find files -maxdepth 1 -name mod_choices.json)' > "%BK%"
 tar -tf "%BK%" 2>nul | findstr /c:"files/native/states/" >nul || (echo backup failed: no savestates in %BK% & exit /b 1)
+"%ADB%" exec-out run-as %PKG% ls files/mod_choices.json 2>nul | findstr /x /c:"files/mod_choices.json" >nul && (
+  tar -tf "%BK%" 2>nul | findstr /x /c:"files/mod_choices.json" >nul || (echo backup failed: the mod choices ^(files/mod_choices.json^) aren't in %BK% & exit /b 1)
+  echo backup: the mod choices are in it
+)
 for %%F in ("%BK%") do echo backup: %%~fF ^(%%~zF bytes^)
 exit /b 0
 
@@ -271,6 +277,13 @@ if not exist "%BK%" (echo no backup: %BK% isn't there & exit /b 1)
 "%ADB%" shell "cat /data/local/tmp/hakux-backup.tar | run-as %PKG% tar -xf -"
 "%ADB%" shell rm /data/local/tmp/hakux-backup.tar
 "%ADB%" shell "run-as %PKG% sh -c 'ls files/native/states/*/'" | findstr /i hxs >nul && (echo restored: savestates are back) || (echo restore: no savestates on the phone after it & exit /b 1)
+rem the mod choices: on the phone as they were backed up (a reinstall once lost the 60 fps mod)
+tar -tf "%BK%" 2>nul | findstr /x /c:"files/mod_choices.json" >nul || (echo restore: no mod choices in the backup: check the game's Mods in hakuX ^(the 60 fps mod on^) & exit /b 0)
+tar -xOf "%BK%" files/mod_choices.json > "%HERE%mod_choices.backup" 2>nul
+"%ADB%" exec-out run-as %PKG% cat files/mod_choices.json > "%HERE%mod_choices.phone" 2>nul
+fc /b "%HERE%mod_choices.backup" "%HERE%mod_choices.phone" >nul || (echo restore failed: the mod choices on the phone aren't the backup's & exit /b 1)
+findstr /c:"60fps" "%HERE%mod_choices.phone" >nul && (echo restored: mod choices, the 60 fps mod on) || (echo restored: mod choices, but the 60 fps mod is off in them: turn it on in hakuX ^(Fable, Mods^))
+del "%HERE%mod_choices.backup" "%HERE%mod_choices.phone"
 exit /b 0
 
 :reinstall

@@ -22,7 +22,7 @@ it, and pulls and uploads the results. Settings live in `route.cfg` next to
 | `route save <slot>` / `route load <slot>` | a savestate of the running game to a slot, or loaded from it |
 | `route watch` / `route stop` | follows a batch again after an adb drop / stops it |
 | `route clean` | clears the runner's settings on the phone after a cut-off batch |
-| `route install` / `route reinstall` | installs the test APK / backs up, uninstalls, installs, restores (for a signing-key mismatch) |
+| `route install` / `route reinstall` | installs the test APK / backs up (savestates, settings, the mod choices `files/mod_choices.json`, GPU driver, saves), uninstalls, installs, restores and checks the mod choices came back (for a signing-key mismatch) |
 | `route backup` / `route restore` | savestates, settings, GPU driver and save games to and from `hakux-backup.tar` |
 | `route pull` / `route upload` | copies the results to the PC / and to the `diag-results` branch |
 
@@ -78,6 +78,7 @@ it, and pulls and uploads the results. Settings live in `route.cfg` next to
 | Display at batch start: `mActiveModeId`, `mActiveSfDisplayMode` and each `DisplayDeviceInfo` (refresh, an external/DeX display) | `dumpsys display \| grep` (on the phone: `grep`, not `findstr`) | 60 vs 120 Hz output, external display |
 | Charging at run start and end: `dumpsys battery` (AC/USB powered, status, level, temperature) and any system setting whose name has `pass_through`, `protect_battery` or `charging` | dumpsys / `settings list system \| grep` | heat from charging (Samsung's pass-through setting name isn't documented: the list shows whatever the phone has) |
 | Build identity: `versionName`, `lastUpdateTime`, `codePath`, the installed APK's sha256 and, when it is the one `route install` installed, its file name with the branch, build number and commit in it (`apk_file`, `apk_branch`, `apk_build`, `apk_commit`); and the `hakuX-native-mods` lines | `dumpsys package`, `pm path` + `sha256sum`, route.bat's record (`route.sh apkrecord`) / logcat | which build and mod ran |
+| **The 60 fps mod in every run** (`REQUIRED_MODS`, `60fps` by default): unless its variant sets `mod=`, a run must log `60fps: [default.xbe] 0003f776: 10 bytes`; without it the run fails (the app's mod choices had lost it: the v5 batches ran without it after a reinstall, the log only saying "savestate made with other mods ... 1 of its mods taken back"). The preflight checks it too, so the queue doesn't start | logcat | a baseline that isn't the baseline |
 | **Run check**: once the replay starts, the mods the game's process applied (its `hakuX-native-mods` `<mod>: [xbe] ...: N bytes` lines) must be the variant's (`mods_expected` / `mods_applied` in `run.txt`), and a variant's `debug.hakux.opts` must have been read (`hakuX-app` `debug.hakux.opts:` lines). A run that fails gets `failed=` in `run.txt`, is cut short and kept out of the report (listed under "Failed runs"); a variant failing twice stops the batch | logcat | a variant that didn't take effect |
 | `cpu: translations of ... dropped`: count per run and the most in any 10 s | logcat | FEX code invalidation (Fable's pager) |
 
@@ -248,6 +249,16 @@ wood` (with `SLOT=2` in `route.cfg`) records one you play instead.
   `simpleperf.txt` (their console output) only when they printed something. The Perfetto
   trace (`trace.pftrace`) and `perf.data` are large and stay in
   `C:\hakuX-tests\routes` unless `UPLOAD_TRACES=1` is set before running.
+
+## Signing
+
+Every build is signed with the repository's debug key (the secret
+`DEBUG_KEYSTORE_B64`, certificate SHA-256 `2C3E189E…6C67C9D` in
+`.github/workflows/build-apk.yml`), so each installs over the last. The
+workflow fails without the secret or with another key in it, and checks the
+APK's certificate with apksigner. Releases up to build 17 each had a
+throwaway key (no secret then): the first build with the debug key needs one
+`route reinstall`, later ones update in place.
 
 ## Requirements
 
