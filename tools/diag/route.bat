@@ -52,8 +52,9 @@ set "ADB=adb"
 rem The test APK: a build of claude/eager-franklin-417v0b (release
 rem build-claude-eager-franklin-417v0b-<n>), with this runner's native side
 rem (NC_PAD_STATE: the replay waits for the savestate's load; debug.hakux.opts).
-rem Not optimized-test-v4's builds: they lack it. Empty: route install <file or URL>.
-set "APK_URL="
+rem Not optimized-test-v4's builds: they lack it. Build 22 and later: signed with the
+rem repository's debug key (certificate SHA-256 2C3E189E...), each installs over the last.
+set "APK_URL=https://github.com/Userx86x32/hakuX86x32/releases/download/build-claude-eager-franklin-417v0b-22/hakuX-debug-claude-eager-franklin-417v0b-22-7d7a275-sd865up.apk"
 where adb >nul 2>nul || if exist "%HERE%platform-tools\adb.exe" (set "ADB=%HERE%platform-tools\adb.exe") else if exist "%HERE%adb.exe" (set "ADB=%HERE%adb.exe") else if exist "C:\hakuX-tests\platform-tools\adb.exe" (set "ADB=C:\hakuX-tests\platform-tools\adb.exe") else if exist "C:\hakuX-tests\adb.exe" (set "ADB=C:\hakuX-tests\adb.exe") else (echo adb not found: put this file next to adb.exe or platform-tools & exit /b 1)
 set "PKG=com.rfandango.haku_x.debug"
 if /i "%1"=="queue" goto queue

@@ -256,9 +256,13 @@ Every build is signed with the repository's debug key (the secret
 `DEBUG_KEYSTORE_B64`, certificate SHA-256 `2C3E189E…6C67C9D` in
 `.github/workflows/build-apk.yml`), so each installs over the last. The
 workflow fails without the secret or with another key in it, and checks the
-APK's certificate with apksigner. Releases up to build 17 each had a
-throwaway key (no secret then): the first build with the debug key needs one
-`route reinstall`, later ones update in place.
+APK's certificate with apksigner. The workflow hands the keystore to
+Gradle (`HAKUX_DEBUG_KEYSTORE`, read in `android/app/build.gradle.kts`):
+written to `~/.android/debug.keystore` alone it wasn't the one the build
+signed with, and every release up to build 21 had a key of its own. Build
+22 (`build-claude-eager-franklin-417v0b-22`) is the first with the debug
+key: installing it over an earlier build takes one `route reinstall`,
+later builds update in place.
 
 ## Requirements
 
