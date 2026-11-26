@@ -161,8 +161,12 @@ jobs:
           cp "$src" "$name"
           # signed with the debug key (APK Signature Scheme v2/v3: apksigner)
           signer="$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -n 1)apksigner"
-          got=$("$signer" verify --print-certs "$name" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | tr 'a-f' 'A-F')
+          # every signer's certificate ("Signer #1 ..." or, with v3,
+          # "Signer (minSdkVersion=...) ...") must be the debug key's
+          out=$("$signer" verify --print-certs "$name")
+          got=$(echo "$out" | sed -n 's/^Signer.* certificate SHA-256 digest: //p' | tr 'a-f' 'A-F' | sort -u)
           if [ "$got" != "$DEBUG_CERT_SHA256" ]; then
+            echo "$out"
             echo "::error::$name is signed with certificate SHA-256 '$got', not the debug key's $DEBUG_CERT_SHA256."
             exit 1
           fi
