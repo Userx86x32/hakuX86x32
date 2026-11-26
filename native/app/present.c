@@ -9,6 +9,7 @@
  */
 #include "native/app/app.h"
 #include "native/dev/dev.h"
+#include "native/core/perfhint.h"
 #include "hw/xbox/hle/vk/display.h"
 #include "hw/xbox/hle/vk/swapchain.h"
 
@@ -166,6 +167,11 @@ static void wait_next_vsync(void)
 
 bool nc_present_frame(struct ANativeWindow *win)
 {
+    static __thread bool joined;
+    if (!joined) {
+        joined = true;
+        nc_perf_thread(NC_PERF_PRESENT);    /* the performance hints' (perfhint.h) */
+    }
     count_frames();
     debug_poll();
     const bool fxaa = g_dbg.fxaa < 0 ? g_fxaa : g_dbg.fxaa != 0;

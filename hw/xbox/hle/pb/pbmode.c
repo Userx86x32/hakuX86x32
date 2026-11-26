@@ -1316,12 +1316,40 @@ void hle_pb_get(void)
  * INTR cleared, FIFO on), each a kick: asleep, each cost the guest a futex
  * wake and the decoder a wake-up before it went on, and Crimson Sea traps
  * ~5900 times a second. */
+/* debug: debug.hakux.pbspin <us> (0-2000; unset: 200), read every 256 passes.
+ * The host scheduler counts the WFE wait as the decoder running: on titles
+ * that kick between passes all the time (Fable: ~70% of a core), it keeps a
+ * fast core busy beside the vCPU. 0 sleeps at once. */
+#if defined(__aarch64__)
+static uint64_t spin_us(void)
+{
+    static uint64_t us = 200;
+    static unsigned passes;
+    if (passes++ % 256 == 0) {
+        char v[PROP_VALUE_MAX] = "";
+        const uint64_t n = hle_prop_get("debug.hakux.pbspin", v) > 0 && v[0] ? strtoull(v, NULL, 10) : 200;
+        const uint64_t want = n > 2000 ? 2000 : n;
+        if (want != us) {
+            hle_log("hakuX-hle-pb", "decoder spin before sleeping: %llu us (debug.hakux.pbspin)",
+                    (unsigned long long)want);
+        }
+        us = want;
+    }
+    return us;
+}
+#endif
+
 static bool kick_wait_brief(uint32_t seen)
 {
 #if defined(__aarch64__)
+    const uint64_t us = spin_us();
+    if (!us) {
+        return false;
+    }
     uint64_t f, t0, t;
     __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(f));
     __asm__ volatile("mrs %0, cntvct_el0" : "=r"(t0));
+    const uint64_t limit = f * us / 1000000;
     for (;;) {
         uint32_t k;
         __asm__ volatile("ldaxr %w0, [%1]" : "=r"(k) : "r"(&g_pb.kicks) : "memory");
@@ -1330,7 +1358,7 @@ static bool kick_wait_brief(uint32_t seen)
         }
         __asm__ volatile("wfe" ::: "memory");
         __asm__ volatile("mrs %0, cntvct_el0" : "=r"(t));
-        if (t - t0 > f / 5000) {
+        if (t - t0 > limit) {
             return false;
         }
     }

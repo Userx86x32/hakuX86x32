@@ -98,6 +98,8 @@ typedef struct NcPadState {
 #define NC_PAD_LTHUMB     0x0040
 #define NC_PAD_RTHUMB     0x0080
 void nc_pad_set(unsigned player, const NcPadState *s);
+/* debug (NC_PAD_RECORD): the recording so far written out (the app pauses). */
+void nc_pad_record_flush(void);
 /* The last rumble strengths the title sent. */
 void nc_pad_rumble(unsigned player, uint16_t *left, uint16_t *right);
 

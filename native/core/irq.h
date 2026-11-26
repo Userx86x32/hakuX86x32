@@ -49,6 +49,8 @@ void nc_irq_enable(unsigned line, bool on);
  * time reaches deadline_ns (0: wait for a line only, up to max_ns). Returns
  * the lines. */
 uint32_t nc_irq_idle_wait(uint64_t deadline_ns, uint64_t max_ns);
+/* The guest CPU's thread's time waiting in nc_irq_idle_wait so far (ns). */
+uint64_t nc_irq_idle_ns(void);
 /* Work for the kernel from a host thread (a disc read done): rings the
  * doorbell and wakes an idle wait as a line does, but delivers no interrupt.
  * nc_irq_take_work says whether any was posted since it last asked. */

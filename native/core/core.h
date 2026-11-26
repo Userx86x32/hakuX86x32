@@ -30,6 +30,9 @@ bool nc_core_boot(NcCore *c, int disc_fd);
 /* The next boot goes into the savestate at path (native/state): the XBE it
  * was running boots, then the state replaces what the boot made. */
 void nc_core_set_loadstate(const char *path);
+/* This process booted into a savestate and loaded it (debug: the pad
+ * script's and recording's NC_PAD_STATE=1, native/dev/xid.c). */
+bool nc_core_state_loaded(void);
 /* The next boot is a relaunch: it boots the XBE the saved launch data page
  * names (nc_kernel_relaunch_file) instead of default.xbe. */
 void nc_core_set_relaunch(bool on);

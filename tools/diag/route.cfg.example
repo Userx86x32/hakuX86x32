@@ -1,0 +1,28 @@
+# route.cfg: settings for route.bat / route.sh. Copy this file to route.cfg
+# next to route.bat and change what you need; lines starting with # are off.
+#
+# Scenes for "route suite": route name and savestate slot, in order. A scene
+# whose slot has no savestate is skipped.
+#SCENES="bower:1 wood:2"
+# Lookout Point is slot 3 (route save 3 on the path from Bowerstone South,
+# before the uphill slope with the trees; route record lookout 3). All three
+# take about 34 minutes, over Auto Blocker's 30: a batch picks two with
+# scenes=lookout:3,wood:2 (queue.txt) instead.
+# Scenes whose route may be a hands-off tour; any other must be recorded.
+#TOUR_SCENES="bower wood"
+# Measurement runs per scene (A B A B ...).
+#RUNS=6
+# Length of the hands-off routes (seconds), made the first time a scene runs
+# and kept on the phone. To make one again (at a new length): route tour bower
+#ROUTE_SECS=75
+# Cool down until the hottest GPU zone is under COOL_C degrees, at most
+# COOL_MAX seconds. The game runs on during the wait, so it barely cools:
+# the default is a short pause; each run's start temperature is recorded.
+#COOL_C=45
+#COOL_MAX=10
+# Probe length (seconds, mid-route).
+#PROBE_SECS=20
+# "route run": the slot, and the probe runs after the measurement runs
+# (perfetto simpleperf prof, or "" for none).
+#SLOT=1
+#PROBES=perfetto

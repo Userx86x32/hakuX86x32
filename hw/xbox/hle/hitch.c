@@ -116,6 +116,7 @@ void hle_hitch_thread(int slot)
     h->since = hle_prof_now();
     h->act = HLE_ACT_RUN;
     g_h.clk_ok[slot] = pthread_getcpuclockid(pthread_self(), &g_h.clk[slot]) == 0;
+    hle_host_perf_thread(slot);         /* the host's performance hints */
 }
 
 void hle_hitch_gpu_done(void)

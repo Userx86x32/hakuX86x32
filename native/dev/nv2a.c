@@ -31,6 +31,7 @@
 #include "hw/xbox/hle/pb/pbmode.h"
 #include "native/core/irq.h"
 #include "native/core/mmio.h"
+#include "native/core/perfhint.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -91,6 +92,33 @@ static uint8_t *g_regs;
 static uint64_t g_vblanks;
 static uint64_t g_frame_ns = FRAME_NS;
 static uint64_t g_last_vblank_ns;     /* when the last vblank came (the raster counts from it) */
+
+/* debug: how long the title's vblank handler takes to answer a vblank (its
+ * acknowledgment, the PCRTC interrupt cleared) and to flip after it, per
+ * 5 s (hakuX-native-vbl): late answers put a finished frame's flip a vblank
+ * later ("guest flipped N ms after its vblank, ready before"). */
+static struct {
+    uint64_t raised;                    /* the pending vblank's time; 0: answered */
+    uint64_t t0;
+    unsigned n, n2, n8, nmiss;          /* acks; over 2 ms; over 8 ms; vblanks unanswered */
+    uint64_t sum, max;
+    unsigned nflip;
+    uint64_t fsum, fmax;
+} g_vbl;
+
+static void vbl_ack(uint64_t now)
+{
+    const uint64_t r = __atomic_exchange_n(&g_vbl.raised, 0, __ATOMIC_ACQ_REL);
+    if (!r || now < r) {
+        return;
+    }
+    const uint64_t d = now - r;
+    g_vbl.n++;
+    g_vbl.sum += d;
+    g_vbl.max = d > g_vbl.max ? d : g_vbl.max;
+    g_vbl.n2 += d > 2000000;
+    g_vbl.n8 += d > 8000000;
+}
 
 /* The panel's vsync (the app's Choreographer, nc_dev_nv2a_display_vsync):
  * when the display's period is a whole multiple of a frame's (60 Hz, 120 Hz),
@@ -540,6 +568,15 @@ static void nv2a_write(void *opaque, uint32_t off, uint64_t value, unsigned size
                        (n >> 24) & 7, (n >> 20) & 7, ld(NV_PCRTC_START));
             }
             hle_host_gpu_trace(HLE_GTR_INCREMENT, (n >> 24) & 7);
+            {
+                const uint64_t vb = __atomic_load_n(&g_last_vblank_ns, __ATOMIC_ACQUIRE), t = now_ns();
+                if (vb && t > vb) {     /* the handler's flip, after its vblank (debug) */
+                    g_vbl.nflip++;
+                    g_vbl.fsum += t - vb;
+                    g_vbl.fmax = t - vb > g_vbl.fmax ? t - vb : g_vbl.fmax;
+                }
+            }
+            nc_perf_flip();                 /* the performance hints' frame (perfhint.h) */
             hle_pb_flipped(ld(NV_PCRTC_START));
             hle_pb_kick();
         }
@@ -550,6 +587,9 @@ static void nv2a_write(void *opaque, uint32_t off, uint64_t value, unsigned size
         return; /* a summary of the units' registers */
     case NV_PCRTC_INTR_0:
         hle_host_gpu_trace(HLE_GTR_PCRTC_CLR, (uint32_t)value);
+        if (value & PCRTC_VBLANK) {
+            vbl_ack(now_ns());          /* the handler answered (debug: hakuX-native-vbl) */
+        }
         __atomic_fetch_and(reg(off), ~(uint32_t)value, __ATOMIC_ACQ_REL);
         update_irq();
         return;
@@ -755,6 +795,24 @@ static void *vblank_thread(void *arg)
         const uint64_t due = next_vblank(next);
         next = wait_vblank(due, next);
         __atomic_store_n(&g_last_vblank_ns, next, __ATOMIC_RELEASE);
+        if (__atomic_exchange_n(&g_vbl.raised, now_ns(), __ATOMIC_ACQ_REL)) {
+            g_vbl.nmiss++;              /* the last one never answered */
+        }
+        if (!g_vbl.t0) {
+            g_vbl.t0 = next;
+        } else if (next - g_vbl.t0 >= 5000000000ull) {
+            if (g_vbl.n || g_vbl.nmiss) {
+                nc_log("hakuX-native-vbl", "vblank answered %u times: avg %.2f max %.2f ms, %u over 2 ms, "
+                       "%u over 8 ms, %u unanswered | flips %u: %.2f avg %.2f max ms after their vblank",
+                       g_vbl.n, g_vbl.n ? g_vbl.sum / 1e6 / g_vbl.n : 0.0, g_vbl.max / 1e6, g_vbl.n2,
+                       g_vbl.n8, g_vbl.nmiss, g_vbl.nflip, g_vbl.nflip ? g_vbl.fsum / 1e6 / g_vbl.nflip : 0.0,
+                       g_vbl.fmax / 1e6);
+            }
+            const uint64_t r = __atomic_load_n(&g_vbl.raised, __ATOMIC_ACQUIRE);
+            memset(&g_vbl, 0, sizeof(g_vbl));
+            g_vbl.raised = r;
+            g_vbl.t0 = next;
+        }
         __atomic_fetch_or(reg(NV_PCRTC_INTR_0), PCRTC_VBLANK, __ATOMIC_ACQ_REL);
         __atomic_fetch_add(&g_vblanks, 1, __ATOMIC_RELAXED);
         hle_host_gpu_trace(HLE_GTR_VBLANK, (uint32_t)g_vblanks | (next < due ? 0x80000000u : 0));

@@ -1,0 +1,14 @@
+name: 60 fps
+description: The game at 60 frames a second instead of 20 or 30, at its normal speed: its logic still steps 15 times a second and every frame is drawn between two steps, as the game does. A frame the device doesn't finish in time shows as soon as it is done. Even on a 60 Hz screen or TV. Use it instead of the 40 fps mod, not with it.
+author: hakuX
+
+# Fable's logic runs at 15 steps a second ([0x912BD8]) and it draws each
+# frame between two steps; its cap is the presentation interval. 0x3F700
+# (the area's target frame rate) waits N = ceil(60 / fps) vblanks a frame,
+# clamped to 1-3 (or at once if late), and keeps the frame period N / 60
+# ([obj+0x1C4]) for the game clock (0x1F36C0). The clamp's upper bound
+# (0x3F776: cmp ecx, 3 / mov ecx, 3) is 1 here: a frame every vblank, the
+# period 1/60 s. Loading screens set their interval elsewhere (0x3F820) and
+# keep it.
+[default.xbe]
+0x0003F776: 83 F9 03 7E 05 B9 03 00 00 00 -> 83 F9 01 7E 05 B9 01 00 00 00
