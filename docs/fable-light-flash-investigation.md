@@ -167,5 +167,5 @@ did not read the variable, and the two autotune runs say nothing.
 Logs (per-test: quiet walk, Hobbe fight; negatives: builds 30-32), three of
 five recordings, `default.xbe` and the disassembly helpers (`xd.py`) are in
 the session's scratch space, not in the repository. The driver's source
-(Mesa `src/freedreno/vulkan/tu_query.cc`) could not be fetched from this
-environment; reading its a7xx occlusion path would settle section 1.
+is readable from sessions in the `hakux-optimization` environment, which
+allows gitlab.freedesktop.org (section 1a).
