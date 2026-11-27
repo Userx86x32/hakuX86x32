@@ -82,6 +82,7 @@ static struct {
     } pend[VIS_PENDING];
     uint32_t npend;
     uint64_t lost;
+    uint64_t negative;                          /* the driver's negative counts, taken as 0 */
 } g_vis = { .in_pass = -1 };
 static struct {
     int all;                                    /* -1: environment not read yet */
@@ -226,10 +227,23 @@ static void vis_reap(uint64_t completed)
             uint64_t n = 0;
             if (T.vkGetQueryPoolResults(g_hvk.dev, g_vis.pool, p->parts[k], 1, sizeof(n), &n,
                                         sizeof(n), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+                /* A count can't be negative, but the Adreno driver (PurpleVK
+                 * 26.3, Turnip's) now and then returns one: -1 to -6 million
+                 * samples, a few times a second in a Fable fight full of
+                 * effects. Passed on, the title's count was about 2^32 less
+                 * that: fully visible, and a flare that should have been
+                 * hidden blazed for that frame (Hobbes' cave). Taken as 0. */
+                if ((int64_t)n < 0) {
+                    if (g_vis.negative++ < 8) {
+                        hle_log("hakuX-hle-back", "vis: the driver counted %lld samples for a test; "
+                                "taken as 0 (logged for the first 8)", (long long)(int64_t)n);
+                    }
+                    continue;
+                }
                 sum += n;
             }
         }
-        uint32_t count = (uint32_t)(sum / p->div);
+        uint32_t count = (uint32_t)MIN(sum / p->div, (uint64_t)INT32_MAX);
         {   /* debug: HAKUX_HLE_VISALL=1 (or debug.hakux.visall=1, live)
              * reports every test fully visible; HAKUX_HLE_VISLOG=<n> (or a new
              * debug.hakux.vislog=<n>) logs the next n results */
