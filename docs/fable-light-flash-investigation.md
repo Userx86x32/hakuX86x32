@@ -1,11 +1,38 @@
 # Fable: the random one-frame light flash (investigation log)
 
-Status: **open**. Written for hand-off; newest findings first in section 1.
+Status: **cause found; fix under test (build from this branch)**. Written for hand-off; newest findings first in section 1.
 Device: Galaxy S24+ (Adreno 750), driver PurpleVK 26.3 (Turnip-based), hakuX
 `master` at build 33, Fable: The Lost Chapters (4D5300D1 v1), 60 fps mod,
 Bloom off. Played on a TV through DeX.
 
-## 1. Where it stands
+## 0. Result of the experiment (2026-11-27) and the fix under test
+
+`flashtest.bat`, 90 s each, Gorge bridge, DeX, screen recorder on:
+
+| Run | Bad counts | Flashes seen | Frame rate |
+|---|---|---|---|
+| baseline (priority 7, autotune `bandwidth`) | 27 | 9 | normal |
+| priority 1 (ringbuffer 0) | 0 | 0 | normal, "best overall" |
+| `TU_AUTOTUNE_ALGO=prefer_gmem` | 1 (4 s after start) | 0 | about 45 fps |
+| `TU_AUTOTUNE_ALGO=prefer_sysmem` | 24 | 13 | normal |
+
+PurpleVK has the autotune code and read the variable (its startup lines are
+in the results). **Cause: preemption.** A sysmem (direct) render pass
+interrupted by higher-priority GPU work between a query's begin and end loses
+the hardware sample counter; tiled passes are immune because each tile closes
+its pairs. Not the autotuner's events: `prefer_sysmem` measures nothing and
+is as bad as the baseline.
+
+**Fix under test:** hakuX's KGSL context priority defaults to 3 instead of 7
+(`native/app/vkdriver.c`): the lowest priority of ringbuffer 0, which nothing
+preempts. Priority 1 is what was measured; 3 is the same ringbuffer
+(ringbuffer = priority / 4) and yields to other ringbuffer-0 work in the
+dispatcher. `debug.hakux.kgslprio 7` restores the old value. Not chosen:
+forcing tiling (costs a quarter of the frame rate here). Still open: the
+shader-counting design in section 6 would make counts immune on any device
+and driver, if the priority alone proves insufficient.
+
+## 1. Where it stands (before the experiment)
 
 **Symptom.** A large soft purple/white glow blazes for exactly one frame,
 then is gone. Seen in Hobbe caves (near puddles, during staff fights) and at

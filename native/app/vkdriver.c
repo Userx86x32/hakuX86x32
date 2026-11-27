@@ -56,7 +56,19 @@ static bool driver_is_mesa(const char *dir)
  * preempts them (0 in 12 minutes); at its lowest priority there, 7, the
  * dispatcher still runs the compositor's work first (2 late frames in 6
  * minutes; priority 1, the first ringbuffer, preempts the compositor: 433).
- * debug.hakux.kgslprio: another priority (1..15), 0 for the driver's own. */
+ *
+ * The first ringbuffer all the same, at its lowest priority (3): on a Galaxy
+ * S24+ (Adreno 750) something above the compositor's ringbuffer preempts us
+ * there (the screen recorder's and a second display's composition raise it
+ * tenfold), and a sysmem pass preempted between an occlusion query's begin
+ * and end comes back with the sample counter reset: the test reads minus
+ * the running count, another too high, and Fable's occlusion-faded glows
+ * flash for a frame. Four 90 s runs on the same route: priority 7, 27
+ * negative counts and 9 flashes; priority 1, none of either at full frame
+ * rate; TU_AUTOTUNE_ALGO=prefer_gmem (no sysmem passes: a tile's pairs
+ * can't be split), 1 and none, at 45 fps for 60; prefer_sysmem, 24 and 13.
+ * debug.hakux.kgslprio: another priority (1..15; 7: the compositor's
+ * ringbuffer, as before), 0 for the driver's own. */
 static int kgsl_priority(const char *dir)
 {
     /* KGSL only: the pack's vendor says "Mesa" for Turnip and for Mesa's
@@ -67,7 +79,7 @@ static int kgsl_priority(const char *dir)
     }
     char v[PROP_VALUE_MAX] = "";
     hle_prop_get("debug.hakux.kgslprio", v);
-    int prio = v[0] ? atoi(v) : 7;
+    int prio = v[0] ? atoi(v) : 3;
     return prio >= 1 && prio <= 15 ? prio : -1;
 }
 #endif
