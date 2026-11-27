@@ -1,0 +1,87 @@
+# Tidies the repository: old build releases and their tags, draft releases,
+# and branches whose work is all in master. Actions -> Clean up -> Run
+# workflow. Without "yes" in the confirm box it only lists what it would
+# delete (a dry run); with "yes" it deletes. master and the newest builds
+# (keep_releases) are never touched.
+name: Clean up
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type yes to delete; anything else only lists what would go
+        type: string
+        default: ""
+      keep_releases:
+        description: How many of the newest build releases to keep
+        type: number
+        default: 1
+      delete_drafts:
+        description: Delete draft releases (uploads such as screen recordings)
+        type: boolean
+        default: true
+      delete_merged_branches:
+        description: Delete branches with no commits that aren't in master
+        type: boolean
+        default: true
+      also_delete_branches:
+        description: More branches to delete, separated by spaces (their work is elsewhere)
+        type: string
+        default: "diag-results playbook claude/stoic-clarke-5h75b8"
+
+permissions:
+  contents: write
+
+jobs:
+  clean:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Clean up
+        env:
+          GH_TOKEN: ${{ github.token }}
+          R: ${{ github.repository }}
+          CONFIRM: ${{ inputs.confirm }}
+          KEEP: ${{ inputs.keep_releases }}
+          DRAFTS: ${{ inputs.delete_drafts }}
+          MERGED: ${{ inputs.delete_merged_branches }}
+          ALSO: ${{ inputs.also_delete_branches }}
+        run: |
+          set -euo pipefail
+          main=$(gh api "repos/$R" --jq .default_branch)
+          if [ "$CONFIRM" = yes ]; then echo "Deleting."; else echo "Dry run: nothing is deleted (type yes to delete)."; fi
+          n=0
+          go() {   # what, then the API path to DELETE
+            n=$((n + 1)); echo "- $1"
+            if [ "$CONFIRM" = yes ]; then gh api -X DELETE "$2" >/dev/null; fi
+          }
+
+          echo "== Releases (keeping the newest $KEEP builds)"
+          rel=$(gh api "repos/$R/releases?per_page=100")
+          keep=$(echo "$rel" | jq -r --argjson k "$KEEP" '[.[] | select(.draft | not)] | sort_by(.created_at) | reverse | .[:$k] | .[].tag_name')
+          echo "kept: $(echo $keep)"
+          while IFS=$'\t' read -r id tag draft; do
+            [ -n "$id" ] || continue
+            if [ "$draft" = true ]; then
+              [ "$DRAFTS" = true ] && go "draft release \"$tag\"" "repos/$R/releases/$id"
+            elif ! grep -qxF "$tag" <<<"$keep"; then
+              go "release $tag" "repos/$R/releases/$id"
+            fi
+          done < <(echo "$rel" | jq -r '.[] | [.id, (if .draft then .name else .tag_name end), .draft] | @tsv')
+
+          echo "== Build tags without a kept release"
+          for t in $(gh api "repos/$R/tags?per_page=100" --jq '.[].name'); do
+            case "$t" in build-*) ;; *) continue ;; esac
+            grep -qxF "$t" <<<"$keep" || go "tag $t" "repos/$R/git/refs/tags/$t"
+          done
+
+          echo "== Branches (never $main)"
+          for b in $(gh api "repos/$R/branches?per_page=100" --jq '.[].name'); do
+            [ "$b" = "$main" ] && continue
+            if grep -qxF "$b" <<<"$(tr ' ' '\n' <<<"$ALSO")"; then
+              go "branch $b (listed)" "repos/$R/git/refs/heads/$b"
+            elif [ "$MERGED" = true ]; then
+              ahead=$(gh api "repos/$R/compare/$main...$b" --jq .ahead_by 2>/dev/null || echo x)
+              [ "$ahead" = 0 ] && go "branch $b (all in $main)" "repos/$R/git/refs/heads/$b"
+            fi
+          done
+          echo "== $n item(s) $([ "$CONFIRM" = yes ] && echo deleted || echo would be deleted)"
