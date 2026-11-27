@@ -234,9 +234,18 @@ static void vis_reap(uint64_t completed)
                  * that: fully visible, and a flare that should have been
                  * hidden blazed for that frame (Hobbes' cave). Taken as 0. */
                 if ((int64_t)n < 0) {
-                    if (g_vis.negative++ < 8) {
+                    /* each one logged, at most 20 a second (a flash on
+                     * screen is matched to its time) */
+                    static int64_t sec;
+                    static unsigned in_sec;
+                    const int64_t now = hle_now_ns() / 1000000000;
+                    in_sec = now == sec ? in_sec + 1 : 1;
+                    sec = now;
+                    g_vis.negative++;
+                    if (in_sec <= 20) {
                         hle_log("hakuX-hle-back", "vis: the driver counted %lld samples for a test; "
-                                "taken as 0 (logged for the first 8)", (long long)(int64_t)n);
+                                "taken as 0 (%llu so far)", (long long)(int64_t)n,
+                                (unsigned long long)g_vis.negative);
                     }
                     continue;
                 }
