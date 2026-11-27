@@ -63,7 +63,7 @@ static struct {
  * published by index for GetVisibilityTestResult (front end), and written
  * to the guest's report when it has one (push-buffer mode's tests have only
  * that: HLE_VIS_NO_INDEX). */
-#define VIS_SLOTS      16384                    /* query pool entries (ring) */
+#define VIS_SLOTS      65536                    /* query pool entries (ring): about 4 MB */
 #define VIS_RESET_AHEAD 2048                    /* slots reset on the GPU ahead of use */
 #define VIS_INDICES    HLE_VIS_INDICES
 #define VIS_MAX_PARTS  16
