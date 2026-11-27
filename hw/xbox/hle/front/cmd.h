@@ -90,7 +90,7 @@ typedef struct HleCmdStatePart {
 
 typedef struct HleCmdVis {
     uint32_t index;             /* D3D visibility test index */
-    uint32_t div;               /* render-target samples per guest pixel (supersampling) */
+    uint32_t div;               /* the target's samples per guest pixel (antialiasing: 2, 4) */
     uint32_t report;            /* guest PA of the device's report for it, 0 none */
     uint32_t pad;
     uint64_t expect;            /* the value GetVisibilityTestResult waits for */
