@@ -63,7 +63,8 @@ static struct {
  * published by index for GetVisibilityTestResult (front end), and written
  * to the guest's report when it has one (push-buffer mode's tests have only
  * that: HLE_VIS_NO_INDEX). */
-#define VIS_SLOTS      4096                     /* query pool entries (ring) */
+#define VIS_SLOTS      16384                    /* query pool entries (ring) */
+#define VIS_RESET_AHEAD 2048                    /* slots reset on the GPU ahead of use */
 #define VIS_INDICES    HLE_VIS_INDICES
 #define VIS_MAX_PARTS  16
 #define VIS_PENDING    1024
@@ -71,6 +72,8 @@ static struct {
 static struct {
     VkQueryPool pool;
     uint32_t next;                              /* ring position */
+    uint64_t used, reset_end;                   /* slots taken; reset on the GPU up to this */
+    bool host_reset;                            /* reset from the CPU (debug.hakux.visreset host) */
     bool active;                                /* a test is open */
     int32_t in_pass;                            /* its query in the open pass, -1 none */
     uint32_t parts[VIS_MAX_PARTS], nparts;
@@ -82,6 +85,7 @@ static struct {
     } pend[VIS_PENDING];
     uint32_t npend;
     uint64_t lost;
+    uint64_t negative;                          /* the driver's negative counts, taken as 0 */
 } g_vis = { .in_pass = -1 };
 static struct {
     int all;                                    /* -1: environment not read yet */
@@ -105,7 +109,35 @@ static bool vis_init(void)
         return false;
     }
     T.vkResetQueryPool(g_hvk.dev, g_vis.pool, 0, VIS_SLOTS);
+    g_vis.reset_end = VIS_SLOTS;                /* every slot ready for its first use */
     return true;
+}
+
+/* At a command buffer's start, outside any pass: the next slots reset on the
+ * GPU, in the command stream, before the queries that use them.
+ *
+ * A slot was reset from the CPU (host query reset) as its query began. On the
+ * Adreno 750 (PurpleVK 26.3, Turnip's) a test now and then came back as minus
+ * the GPU's running sample count, as if its end had read a stale value: -0.3
+ * to -101 million samples, a few times a second in a Fable fight, and a test
+ * beside it too high, so a flare that should have been hidden flashed (Hobbe
+ * caves, Greatwood Gorge's bridge). A reset in the command stream is ordered
+ * with the GPU's own writes to the slot. debug.hakux.visreset host: the CPU's,
+ * as before. */
+static void vis_cb_begin(VkCommandBuffer cb)
+{
+    if (!g_vis.pool || g_vis.host_reset) {
+        return;
+    }
+    if (g_vis.reset_end < g_vis.used) {
+        g_vis.reset_end = g_vis.used;           /* back from the CPU's resets: from here on */
+    }
+    while (g_vis.reset_end < g_vis.used + VIS_RESET_AHEAD) {
+        const uint32_t first = (uint32_t)(g_vis.reset_end % VIS_SLOTS);
+        const uint32_t n = MIN((uint32_t)VIS_RESET_AHEAD, VIS_SLOTS - first);
+        T.vkCmdResetQueryPool(cb, g_vis.pool, first, n);
+        g_vis.reset_end += n;
+    }
 }
 
 /* A draw inside the open pass while a test is open: its query starts. */
@@ -116,7 +148,10 @@ static void vis_draw(VkCommandBuffer cb)
         return;
     }
     uint32_t slot = g_vis.next++ % VIS_SLOTS;
-    T.vkResetQueryPool(g_hvk.dev, g_vis.pool, slot, 1);    /* the ring is far ahead of use */
+    if (g_vis.host_reset || g_vis.used >= g_vis.reset_end) {
+        T.vkResetQueryPool(g_hvk.dev, g_vis.pool, slot, 1);    /* none reset ahead: the CPU's */
+    }
+    g_vis.used++;
     T.vkCmdBeginQuery(cb, g_vis.pool, slot,
                       g_hvk.caps.occl_precise ? VK_QUERY_CONTROL_PRECISE_BIT : 0);
     g_vis.in_pass = (int32_t)slot;
@@ -226,10 +261,32 @@ static void vis_reap(uint64_t completed)
             uint64_t n = 0;
             if (T.vkGetQueryPoolResults(g_hvk.dev, g_vis.pool, p->parts[k], 1, sizeof(n), &n,
                                         sizeof(n), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+                /* A count can't be negative, but the Adreno driver (PurpleVK
+                 * 26.3, Turnip's) now and then returns one: -1 to -6 million
+                 * samples, a few times a second in a Fable fight full of
+                 * effects. Passed on, the title's count was about 2^32 less
+                 * that: fully visible, and a flare that should have been
+                 * hidden blazed for that frame (Hobbes' cave). Taken as 0. */
+                if ((int64_t)n < 0) {
+                    /* each one logged, at most 20 a second (a flash on
+                     * screen is matched to its time) */
+                    static int64_t sec;
+                    static unsigned in_sec;
+                    const int64_t now = hle_now_ns() / 1000000000;
+                    in_sec = now == sec ? in_sec + 1 : 1;
+                    sec = now;
+                    g_vis.negative++;
+                    if (in_sec <= 20) {
+                        hle_log("hakuX-hle-back", "vis: the driver counted %lld samples for a test; "
+                                "taken as 0 (%llu so far)", (long long)(int64_t)n,
+                                (unsigned long long)g_vis.negative);
+                    }
+                    continue;
+                }
                 sum += n;
             }
         }
-        uint32_t count = (uint32_t)(sum / p->div);
+        uint32_t count = (uint32_t)MIN(sum / p->div, (uint64_t)INT32_MAX);
         {   /* debug: HAKUX_HLE_VISALL=1 (or debug.hakux.visall=1, live)
              * reports every test fully visible; HAKUX_HLE_VISLOG=<n> (or a new
              * debug.hakux.vislog=<n>) logs the next n results */
@@ -529,6 +586,7 @@ static VkCommandBuffer cb_get(void)
                 .memoryBarrierCount = 1, .pMemoryBarriers = &mb };
             T.vkCmdPipelineBarrier2(f->cb, &di);
         }
+        vis_cb_begin(f->cb);
         hle_draw_rec_begin(f->cb);
         hle_draw_state_lost();
         gput_begin(f->cb, g_back.cur);
@@ -1963,6 +2021,13 @@ static void back_props_poll(uint64_t swap)
     if (pend != g_pend_ns) {
         g_pend_ns = pend;
         hle_log("hakuX-hle-back", "boundaries wait at most %lld us", (long long)(pend / 1000));
+    }
+    v[0] = 0;
+    hle_prop_get("debug.hakux.visreset", v);
+    if (!strcmp(v, "host") != g_vis.host_reset) {
+        g_vis.host_reset = !g_vis.host_reset;
+        hle_log("hakuX-hle-back", "vis: query slots reset %s",
+                g_vis.host_reset ? "from the CPU (debug.hakux.visreset)" : "on the GPU");
     }
     v[0] = 0;
     hle_prop_get("debug.hakux.vispx", v);

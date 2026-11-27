@@ -1,0 +1,13 @@
+name: Flares off
+description: Removes the light flares Fable puts on lamps, glowing staffs and other light sources. Under hakuX a flare that should be hidden can flash on for a frame (a purple or white disc, often near the edge of the screen in Hobbe caves). The lights themselves stay. Takes effect for objects created after it is on: load a save or change area, not a savestate.
+author: hakuX
+
+# A graphic appearance's set-up (0x34F550, a virtual method) looks for its
+# mesh's helper points: LIGHT_POINT (the string at 0x98B488) makes a light at
+# each (0x34ED60), then FLARE_POINT (0x98B48C) a flare at each (0x34F3E0),
+# whose brightness is a visibility test's. The flare loop starts with
+# "jle 0x34F627" (no flare points: skip it); jumping always skips it. The
+# loop counts nothing the code after it reads (the lights' count at
+# [esp+0x3C] is the light loop's), so only the flares go.
+[default.xbe]
+0x0034F5F1: 7E 34 -> EB 34
