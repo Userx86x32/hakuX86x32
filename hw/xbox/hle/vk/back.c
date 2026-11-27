@@ -87,6 +87,7 @@ static struct {
     int all;                                    /* -1: environment not read yet */
     int nlog;                                   /* results still to log */
     bool off;                                   /* no GPU queries (debug.hakux.visoff) */
+    bool px;                                    /* counts per pixel, not sample (debug.hakux.vispx) */
 } g_vis_dbg = { -1, 0 };
 
 static bool vis_init(void)
@@ -173,7 +174,23 @@ static void cmd_vis_end(const HleCmdVis *c)
     p->index = c->index;
     HleVkSurf *vrt = hle_surf_get(g_back.rt);
     uint32_t vsc = vrt ? vrt->scale : g_hle_rscale;
-    p->div = MAX(c->div, 1u) * vsc * vsc;               /* guest pixels */
+    /* The NV2A counts samples: an antialiased target's 2 or 4 per pixel each
+     * count, and D3D's GetVisibilityTestResult divides by them itself (Fable
+     * inlines it: its count times 1/2 x 1/2 for 4-sample multisampling, 1/3
+     * x 1/3 for 9). Counted per guest pixel here as well, a test saw a
+     * quarter of what it drew (suspected in Fable's flares pulsing in and
+     * out in Hobbes' cave). Only the render scale is taken out;
+     * debug.hakux.vispx 1 divides by the samples too (the old count). */
+    const uint32_t aa = MAX(c->div, 1u);
+    if (aa > 1) {
+        static bool said;
+        if (!said) {
+            said = true;
+            hle_log("hakuX-hle-back", "vis: antialiased target (%u samples a pixel): tests count samples%s",
+                    aa, g_vis_dbg.px ? " (debug.hakux.vispx: per pixel)" : "");
+        }
+    }
+    p->div = (g_vis_dbg.px ? aa : 1u) * vsc * vsc;      /* guest samples (pixels: vispx) */
     p->report = c->report;
     p->expect = c->expect;
     p->nparts = g_vis.nparts;
@@ -1904,7 +1921,9 @@ static void cmd_swap(const HleCmdSwap *c)
 
 /* Live debug properties, every 3 swaps: debug.hakux.visall (1: every test
  * fully visible, 0: as counted), a new debug.hakux.vislog=<n> (log the next n
- * results), debug.hakux.visoff (1: no GPU queries; with visall=1 the draws
+ * results), debug.hakux.vispx (1: an antialiased target's tests count
+ * pixels, not samples: the old count), debug.hakux.visoff (1: no GPU
+ * queries; with visall=1 the draws
  * stay the same, the queries' GPU cost goes), debug.hakux.fbbar (0: no
  * barrier before a draw reading its target; its cost, the pixels may go
  * wrong) and debug.hakux.gpucut (frag: next to no fragments, draw: the
@@ -1944,6 +1963,13 @@ static void back_props_poll(uint64_t swap)
     if (pend != g_pend_ns) {
         g_pend_ns = pend;
         hle_log("hakuX-hle-back", "boundaries wait at most %lld us", (long long)(pend / 1000));
+    }
+    v[0] = 0;
+    hle_prop_get("debug.hakux.vispx", v);
+    if ((atoi(v) != 0) != g_vis_dbg.px) {
+        g_vis_dbg.px = !g_vis_dbg.px;
+        hle_log("hakuX-hle-back", "vis: an antialiased target's tests count %s",
+                g_vis_dbg.px ? "pixels (debug.hakux.vispx)" : "samples");
     }
     v[0] = 0;
     hle_prop_get("debug.hakux.visoff", v);
