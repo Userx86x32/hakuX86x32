@@ -1,6 +1,6 @@
 # Fable: the random one-frame light flash (investigation log)
 
-Status: **cause found; fix under test (build from this branch)**. Written for hand-off; newest findings first in section 1.
+Status: **fixed** (build 34: KGSL priority 3; the owner saw no more flashes). Written for hand-off; newest findings first in section 1.
 Device: Galaxy S24+ (Adreno 750), driver PurpleVK 26.3 (Turnip-based), hakuX
 `master` at build 33, Fable: The Lost Chapters (4D5300D1 v1), 60 fps mod,
 Bloom off. Played on a TV through DeX.
@@ -23,7 +23,7 @@ the hardware sample counter; tiled passes are immune because each tile closes
 its pairs. Not the autotuner's events: `prefer_sysmem` measures nothing and
 is as bad as the baseline.
 
-**Fix under test:** hakuX's KGSL context priority defaults to 3 instead of 7
+**Fix (confirmed by the owner after build 34):** hakuX's KGSL context priority defaults to 3 instead of 7
 (`native/app/vkdriver.c`): the lowest priority of ringbuffer 0, which nothing
 preempts. Priority 1 is what was measured; 3 is the same ringbuffer
 (ringbuffer = priority / 4) and yields to other ringbuffer-0 work in the
